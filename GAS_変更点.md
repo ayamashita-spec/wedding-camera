@@ -339,32 +339,28 @@ function toClientImage(file) {
   なお Google 側のクォータ（GAS の 1 日あたり実行時間・UrlFetch 回数、Drive の容量）は
   こちらでは外せません。実質的な上限はそちらになります。
 
-## 第2弾（適用済み・バージョン 38 / 2026-08-01）
+## 第2弾（適用済み・バージョン 39 / 2026-08-01）
 
-受付期間と削除機能を追加しました。**こちらも適用済みです。**
+受付期間の締切を追加しました。**こちらも適用済みです。**
 
 追加した関数: `getUploadDeadline` / `isUploadOpen` / `uploadClosedMessage` /
-`handleGetStatus` / `assertAdmin` / `handleDeletePhoto` / `generateAdminToken` /
-`setUploadDeadline`
+`handleGetStatus` / `setUploadDeadline`
 
-追加したアクション: `getStatus`（受付状況の問い合わせ）/ `deletePhoto`（管理者のみ）
+追加したアクション: `getStatus`（受付状況の問い合わせ）
 
-新しいスクリプトプロパティ（すべて任意）
+新しいスクリプトプロパティ（どちらも任意）
 
 | 名前 | 用途 |
 |---|---|
 | `UPLOAD_DEADLINE` | 受付終了日時。未設定なら無期限。`setUploadDeadline()` から設定 |
 | `UPLOAD_CLOSED_MESSAGE` | 受付終了時の案内文。未設定なら既定文 |
-| `ADMIN_TOKEN` | 削除機能の鍵。`generateAdminToken()` で生成。未設定なら削除機能は無効 |
 
 設計上の判断
 
 - 受付判定が壊れた値だった場合は **「受付中」に倒します**。
   誤設定で受付が止まる方が、事故として重いためです。
-- 削除は `setTrashed(true)`（ゴミ箱へ移動）です。完全削除はしません。
-- 削除前に `getFileInTargetFolder()` を通すので、`ADMIN_TOKEN` が漏れても
-  保存先フォルダの外にあるファイルは消せません。
 
-## 未着手（別途ご相談ください）
-
-- ゲストが自分の写真だけを消せる仕組み（誰の写真かを認証できないため保留）
+> 一度は写真の削除機能（`deletePhoto` / `ADMIN_TOKEN`）も入れましたが、
+> 不要との判断でバージョン 39 で撤去しました。削除が必要なときは
+> Drive のフォルダを直接開いて操作してください。公開エンドポイントに
+> 削除 API を置かないぶん安全です。
