@@ -137,11 +137,6 @@
     .btn-mode-album { background: #fff; color: #444; border: 1.5px solid var(--wedding-gold); }
     .btn-mode-album:active { transform: scale(0.96); background: #fafafa; }
 
-    .btn-pwa-guide {
-      background: transparent; border: none; color: #6b6b6b; font-size: 11px;
-      margin-top: 15px; cursor: pointer; text-decoration: underline;
-    }
-
     /* 未送信の写真がある場合の通知 */
     .pending-banner {
       display: none; width: 100%; max-width: 380px; margin-top: 16px;
@@ -583,9 +578,6 @@
         </button>
       </div>
 
-      <button class="btn-pwa-guide" data-action="show-pwa-guide">
-        💡 アドレスバーを消してアプリのように開く
-      </button>
     </div>
 
     <!-- 未送信写真の通知 -->
@@ -718,26 +710,6 @@
     </div>
   </div>
 
-  <!-- ══ PWA ガイド ════════════════════════════════════ -->
-  <div id="pwaModal" class="modal" data-close-on-backdrop>
-    <div class="modal-content-wrapper glass-panel" style="padding: 30px 22px; background: #fff;">
-      <div style="font-size: 32px; margin-bottom: 8px;" aria-hidden="true">📲</div>
-      <h2 style="font-size: 16px; color: var(--wedding-pink-deep); margin: 0 0 16px;">
-        アプリのように全画面で開く
-      </h2>
-      <div style="font-size: 12px; line-height: 1.9; color: #555; text-align: left;
-                  margin-bottom: 20px; background: rgba(0,0,0,0.03); padding: 16px; border-radius: 12px;">
-        <b>iPhone / Safari</b><br>
-        1. 画面下の共有ボタン（□ に ↑ のアイコン）をタップ<br>
-        2. 「<b>ホーム画面に追加</b>」を選ぶ<br><br>
-        <b>Android / Chrome</b><br>
-        1. 右上のメニュー（︙）をタップ<br>
-        2. 「<b>ホーム画面に追加</b>」または「<b>アプリをインストール</b>」を選ぶ
-      </div>
-      <button data-action="close-pwa-modal" class="name-submit-btn">閉じる</button>
-    </div>
-  </div>
-
   <!-- ══ 保存方法シート ════════════════════════════════ -->
   <div class="sheet-backdrop" id="downloadSheet" data-close-on-backdrop>
     <div class="sheet">
@@ -817,11 +789,13 @@
     JPEG_QUALITY: 0.80,
 
     /* --- 撮影範囲 ---------------------------------------------------------
-       'native'  : カメラのフレーム全体を保存（歪みなし・情報量が最大）
-       'preview' : 画面に見えている範囲だけを切り出す（見た目どおり）
-       縦持ちで 'preview' にすると 9:19.5 のような細長い写真になるため
-       既定は 'native' にしています。 */
-    CAPTURE_MODE: 'native',
+       'orientation' : 端末の向きに合わせて 3:4（縦持ち）/ 4:3（横持ち）で切り出す
+       'native'      : カメラのフレーム全体を保存（歪みなし・情報量が最大）
+       'preview'     : 画面に見えている範囲だけを切り出す（9:19.5 の細長い写真になる）
+
+       既定は 'orientation'。'native' だとカメラのフレーム向きがそのまま出るため、
+       端末を横にしても縦長の写真になる機種がありました。 */
+    CAPTURE_MODE: 'orientation',
 
     /** 連写の下限間隔。同じフレームが何枚も積まれるのを防ぎます */
     SHUTTER_COOLDOWN_MS: 700,
@@ -894,7 +868,7 @@
     'btnRefreshAlbum', 'btnSelectToggle', 'selectionToolbar', 'selectedCountText',
     'downloadBarInfo', 'btnExecDownload',
     'imageModal', 'modalImg', 'modalUploaderName', 'modalDownloadBtn',
-    'nameModal', 'nameInput', 'nameInputHint', 'nameModalCancelBtn', 'pwaModal',
+    'nameModal', 'nameInput', 'nameInputHint', 'nameModalCancelBtn',
     'downloadSheet', 'sheetTitle', 'sheetSubtitle', 'optShare', 'optShareTitle', 'optZip', 'optDrive',
     'progressOverlay', 'progressText', 'progressBar', 'progressSubtext', 'btnCancelProgress',
     'toastStack'
@@ -1508,6 +1482,23 @@
    * ======================================================================== */
 
   /**
+   * 端末が横向きかどうか。
+   *
+   * 端末によって使える API が違うため 3 段構えにします。
+   * screen.orientation が最も確実で、iOS の古い Safari は window.orientation、
+   * どちらも無い環境（PC など）は単純に画面の縦横比で判定します。
+   */
+  function isLandscape() {
+    try {
+      const angle = screen.orientation && screen.orientation.angle;
+      if (typeof angle === 'number') return angle === 90 || angle === 270;
+    } catch (error) { /* 下のフォールバックへ */ }
+
+    if (typeof window.orientation === 'number') return Math.abs(window.orientation) === 90;
+    return window.innerWidth > window.innerHeight;
+  }
+
+  /**
    * video の現在フレームを canvas に描きます。
    *
    * 旧版の問題:
@@ -1527,7 +1518,27 @@
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    if (CONFIG.CAPTURE_MODE === 'preview') {
+    if (CONFIG.CAPTURE_MODE === 'orientation') {
+      /* 端末の向きに合わせて 3:4（縦）/ 4:3（横）に中央切り出しします。
+         カメラが返すフレームの向きは端末依存で、iOS は端末を回すと
+         videoWidth/Height が入れ替わりますが、Android では横のままの機種があります。
+         「フレームがどちら向きか」ではなく「端末がどちら向きか」を基準に
+         切り出すことで、どちらの挙動の端末でも持った向きどおりに保存されます。 */
+      const targetRatio = isLandscape() ? (4 / 3) : (3 / 4);
+
+      let srcW = vw;
+      let srcH = vh;
+      if (vw / vh > targetRatio) srcW = Math.round(vh * targetRatio);
+      else srcH = Math.round(vw / targetRatio);
+
+      const sx = Math.round((vw - srcW) / 2);
+      const sy = Math.round((vh - srcH) / 2);
+
+      const scale = Math.min(1, CONFIG.MAX_DIM / Math.max(srcW, srcH));
+      canvas.width = Math.max(1, Math.round(srcW * scale));
+      canvas.height = Math.max(1, Math.round(srcH * scale));
+      ctx.drawImage(video, sx, sy, srcW, srcH, 0, 0, canvas.width, canvas.height);
+    } else if (CONFIG.CAPTURE_MODE === 'preview') {
       // 画面に見えている範囲だけを切り出します（object-fit: cover と同じ計算）
       const rect = video.getBoundingClientRect();
       const previewRatio = (rect.width && rect.height) ? rect.width / rect.height : vw / vh;
@@ -2349,8 +2360,6 @@
     'open-camera': openCameraWithFullscreen,
     'open-album': () => navigateTo('album'),
     'back-to-cover': () => navigateTo('cover'),
-    'show-pwa-guide': () => openOverlay(els.pwaModal),
-    'close-pwa-modal': () => closeOverlay(els.pwaModal),
     'retry-uploads': retryFailedUploads,
     'save-pending-local': savePendingPhotosLocally,
     'toggle-fullscreen': toggleFullscreen,
@@ -2416,7 +2425,6 @@
       if (event.key !== 'Escape') return;
       if (els.imageModal.classList.contains('is-open')) closeImageModal();
       else if (els.downloadSheet.classList.contains('is-open')) ACTIONS['close-download-sheet']();
-      else if (els.pwaModal.classList.contains('is-open')) closeOverlay(els.pwaModal);
     });
 
     document.addEventListener('fullscreenchange', syncFullscreenUI);
