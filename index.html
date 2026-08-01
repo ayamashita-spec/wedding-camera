@@ -401,17 +401,22 @@
       white-space: nowrap;
     }
     .queue-status-badge.is-warning { background: rgba(217, 83, 79, 0.95); }
-    /* バッジ自体を進捗ゲージにします。別の帯を足すと画面を邪魔するためです。
-       --progress は JS が 0%〜100% で更新します。 */
-    .queue-status-badge.has-progress {
-      background: linear-gradient(
-        to right,
-        rgba(160, 96, 112, 0.97) 0,
-        rgba(160, 96, 112, 0.97) var(--progress, 0%),
-        rgba(223, 168, 180, 0.95) var(--progress, 0%),
-        rgba(223, 168, 180, 0.95) 100%
+    /* 送信中は流れる縞を重ねます。GAS 相手では送信バイト数が取れないため、
+       進捗率を装う代わりに「動いている」ことだけを示す不確定表示にします。 */
+    .queue-status-badge.is-sending {
+      background-image: linear-gradient(
+        115deg,
+        rgba(255,255,255,0) 30%,
+        rgba(255,255,255,0.32) 50%,
+        rgba(255,255,255,0) 70%
       );
-      transition: none;
+      background-size: 220% 100%;
+      background-repeat: no-repeat;
+      animation: sendingSweep 1.4s linear infinite;
+    }
+    @keyframes sendingSweep {
+      from { background-position: 120% 0; }
+      to   { background-position: -120% 0; }
     }
     .queue-status-badge > * { position: relative; z-index: 1; }
     .queue-spinner {
@@ -1117,8 +1122,8 @@
     /** 音声トラックつきのストリームを掴んでいるか */
     streamHasAudio: false,
 
-    /** いま送信中の 1 件の進捗。バッジのゲージ表示に使います */
-    upload: { active: false, isVideo: false, bytes: 0, ratio: 0, processing: false }
+    /** いま送信中の 1 件。バッジの表示に使います */
+    upload: { active: false, isVideo: false, bytes: 0, startedAt: 0 }
   };
 
   const els = {};
@@ -1353,56 +1358,16 @@
   /**
    * アップロード専用の送信。
    *
-   * fetch には「何バイト送れたか」を知る手段がありません。動画は 1 本 3MB 前後で
-   * 会場の回線だと十数秒〜数十秒かかるため、無反応に見えないよう XHR で
-   * 進捗を拾います。Content-Type は付けません（付けるとプリフライトが発生し、
-   * GAS は OPTIONS に応答できないため全滅します）。
+   * ここは必ず fetch を使います。XMLHttpRequest だと GAS が返す 302 リダイレクトを
+   * CORS 越しに追えず失敗し、さらに upload.onprogress を付けた時点で
+   * 「単純リクエスト」から外れてプリフライト（OPTIONS）まで発生します。
+   * GAS は OPTIONS に応答できないため、どちらにしても送信できません。
    *
-   * @param {function(number, number)} onProgress (送信済みバイト, 全体バイト)
+   * その代償として「何バイト送れたか」は取得できません。進捗表示は
+   * 経過時間と件数で行います（偽のパーセンテージは出しません）。
    */
-  function postUpload(params, timeoutMs, onProgress) {
-    return new Promise((resolve, reject) => {
-      const body = Object.assign({ action: 'upload' }, params);
-      if (CONFIG.API_TOKEN) body.token = CONFIG.API_TOKEN;
-      const payload = JSON.stringify(body);
-
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', CONFIG.API_URL, true);
-      xhr.timeout = timeoutMs;
-
-      xhr.upload.onprogress = (event) => {
-        if (!onProgress) return;
-        // lengthComputable が false の端末もあるので、その時は payload 長で代用します
-        const total = event.lengthComputable ? event.total : payload.length;
-        onProgress(event.loaded, total);
-      };
-      // 送信完了後は「サーバー処理待ち」。100% で止まって見えないよう合図します
-      xhr.upload.onload = () => { if (onProgress) onProgress(-1, -1); };
-
-      xhr.onload = () => {
-        if (xhr.status < 200 || xhr.status >= 300) {
-          reject(new Error('HTTP ' + xhr.status));
-          return;
-        }
-        let json;
-        try { json = JSON.parse(xhr.responseText); }
-        catch (error) { reject(new Error('応答を解釈できませんでした')); return; }
-
-        if (!json.success) {
-          const error = new Error(json.error || '不明なエラー');
-          error.isServerError = true;
-          if (json.closed) error.uploadClosed = true;
-          reject(error);
-          return;
-        }
-        resolve(json);
-      };
-      xhr.onerror = () => reject(new Error('通信に失敗しました'));
-      xhr.ontimeout = () => reject(new Error('通信がタイムアウトしました'));
-      xhr.onabort = () => reject(new Error('送信を中止しました'));
-
-      xhr.send(payload);
-    });
+  function postUpload(params, timeoutMs) {
+    return callApi('upload', params, { timeout: timeoutMs });
   }
 
   /**
@@ -1623,8 +1588,7 @@
               attempt: item.sendAttempts || 0
             },
             // 動画は容量が桁違いなので待ち時間を長く取ります
-            item.kind === 'video' ? CONFIG.VIDEO_UPLOAD_TIMEOUT_MS : CONFIG.UPLOAD_TIMEOUT_MS,
-            onUploadProgress);
+            item.kind === 'video' ? CONFIG.VIDEO_UPLOAD_TIMEOUT_MS : CONFIG.UPLOAD_TIMEOUT_MS);
 
             await Queue.remove(key);
             handled.add(key);
@@ -1813,34 +1777,31 @@
     }
   }
 
-  /* ── 送信中の進捗 ─────────────────────────────────────
-     動画は 1 本 3MB 前後あり、無反応に見える時間が長くなります。
-     画面を覆わないよう、既にある同期バッジの中を進捗ゲージにします。 */
+  /* ── 送信中の表示 ─────────────────────────────────────
+     GAS が相手だとバイト単位の送信量は取得できません（XHR は 302 リダイレクトを
+     CORS 越しに追えず、upload.onprogress はプリフライトを誘発するため）。
+     偽のパーセンテージを出すのは害なので、「何を・どれだけの大きさで・
+     何秒かけて」送っているかを正直に見せます。バーは進捗ではなく
+     「動いている」ことを示す不確定表示にします。 */
+  let uploadTicker = null;
+
   function beginUploadProgress(item) {
     state.upload = {
       active: true,
       isVideo: item.kind === 'video',
       bytes: item.blob ? item.blob.size : 0,
-      ratio: 0,
-      processing: false
+      startedAt: Date.now()
     };
     updateQueueBadge();
-  }
-
-  function onUploadProgress(loaded, total) {
-    if (!state.upload.active) return;
-    if (loaded < 0) {
-      // 送信完了。ここからはサーバー側の処理待ちです
-      state.upload.processing = true;
-      state.upload.ratio = 1;
-    } else {
-      state.upload.ratio = total > 0 ? Math.min(1, loaded / total) : 0;
-    }
-    updateQueueBadge();
+    clearInterval(uploadTicker);
+    // 経過秒だけを 1 秒ごとに描き替えます
+    uploadTicker = setInterval(updateQueueBadge, 1000);
   }
 
   function endUploadProgress() {
-    state.upload = { active: false, isVideo: false, bytes: 0, ratio: 0, processing: false };
+    clearInterval(uploadTicker);
+    uploadTicker = null;
+    state.upload = { active: false, isVideo: false, bytes: 0, startedAt: 0 };
     updateQueueBadge();
   }
 
@@ -1858,12 +1819,11 @@
       if (waiting) {
         label = count + ' 件：電波を待っています';
       } else if (up.active) {
-        const what = up.isVideo ? '動画' : '写真';
-        label = up.processing
-          ? what + 'を保存しています…'
-          : what + ' ' + Math.round(up.ratio * 100) + '%'
-            + (up.bytes ? '（' + formatMb(up.bytes) + '）' : '')
-            + (count > 1 ? ' ・残り ' + count + ' 件' : '');
+        const seconds = Math.floor((Date.now() - up.startedAt) / 1000);
+        label = (up.isVideo ? '動画' : '写真')
+          + (up.bytes ? ' ' + formatMb(up.bytes) : '') + ' を送信中'
+          + (seconds > 0 ? '  ' + seconds + '秒' : '')
+          + (count > 1 ? ' ・残り ' + count + ' 件' : '');
       } else {
         label = count + ' 件を送信中…';
       }
@@ -1871,10 +1831,7 @@
       els.queueBadgeText.textContent = label;
       els.queueSpinner.hidden = waiting;
       els.queueBadge.classList.toggle('is-warning', waiting);
-      // バッジ自体をゲージにします（別の要素を足すと画面を邪魔するため）
-      els.queueBadge.style.setProperty('--progress',
-        (up.active && !waiting ? up.ratio * 100 : 0) + '%');
-      els.queueBadge.classList.toggle('has-progress', up.active && !waiting);
+      els.queueBadge.classList.toggle('is-sending', up.active && !waiting);
       els.queueBadge.style.display = 'flex';
     } else if (state.failedCount > 0) {
       els.queueBadgeText.textContent = '⚠️ ' + state.failedCount + ' 枚が未送信';
@@ -1883,7 +1840,7 @@
       els.queueBadge.style.display = 'flex';
     } else {
       els.queueBadge.style.display = 'none';
-      els.queueBadge.classList.remove('has-progress');
+      els.queueBadge.classList.remove('is-sending');
     }
   }
 
