@@ -401,6 +401,19 @@
       white-space: nowrap;
     }
     .queue-status-badge.is-warning { background: rgba(217, 83, 79, 0.95); }
+    /* バッジ自体を進捗ゲージにします。別の帯を足すと画面を邪魔するためです。
+       --progress は JS が 0%〜100% で更新します。 */
+    .queue-status-badge.has-progress {
+      background: linear-gradient(
+        to right,
+        rgba(160, 96, 112, 0.97) 0,
+        rgba(160, 96, 112, 0.97) var(--progress, 0%),
+        rgba(223, 168, 180, 0.95) var(--progress, 0%),
+        rgba(223, 168, 180, 0.95) 100%
+      );
+      transition: none;
+    }
+    .queue-status-badge > * { position: relative; z-index: 1; }
     .queue-spinner {
       width: 10px; height: 10px; border-radius: 50%;
       border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff;
@@ -1102,7 +1115,10 @@
     recordTimer: null,
     recordStartedAt: 0,
     /** 音声トラックつきのストリームを掴んでいるか */
-    streamHasAudio: false
+    streamHasAudio: false,
+
+    /** いま送信中の 1 件の進捗。バッジのゲージ表示に使います */
+    upload: { active: false, isVideo: false, bytes: 0, ratio: 0, processing: false }
   };
 
   const els = {};
@@ -1335,6 +1351,61 @@
   }
 
   /**
+   * アップロード専用の送信。
+   *
+   * fetch には「何バイト送れたか」を知る手段がありません。動画は 1 本 3MB 前後で
+   * 会場の回線だと十数秒〜数十秒かかるため、無反応に見えないよう XHR で
+   * 進捗を拾います。Content-Type は付けません（付けるとプリフライトが発生し、
+   * GAS は OPTIONS に応答できないため全滅します）。
+   *
+   * @param {function(number, number)} onProgress (送信済みバイト, 全体バイト)
+   */
+  function postUpload(params, timeoutMs, onProgress) {
+    return new Promise((resolve, reject) => {
+      const body = Object.assign({ action: 'upload' }, params);
+      if (CONFIG.API_TOKEN) body.token = CONFIG.API_TOKEN;
+      const payload = JSON.stringify(body);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', CONFIG.API_URL, true);
+      xhr.timeout = timeoutMs;
+
+      xhr.upload.onprogress = (event) => {
+        if (!onProgress) return;
+        // lengthComputable が false の端末もあるので、その時は payload 長で代用します
+        const total = event.lengthComputable ? event.total : payload.length;
+        onProgress(event.loaded, total);
+      };
+      // 送信完了後は「サーバー処理待ち」。100% で止まって見えないよう合図します
+      xhr.upload.onload = () => { if (onProgress) onProgress(-1, -1); };
+
+      xhr.onload = () => {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error('HTTP ' + xhr.status));
+          return;
+        }
+        let json;
+        try { json = JSON.parse(xhr.responseText); }
+        catch (error) { reject(new Error('応答を解釈できませんでした')); return; }
+
+        if (!json.success) {
+          const error = new Error(json.error || '不明なエラー');
+          error.isServerError = true;
+          if (json.closed) error.uploadClosed = true;
+          reject(error);
+          return;
+        }
+        resolve(json);
+      };
+      xhr.onerror = () => reject(new Error('通信に失敗しました'));
+      xhr.ontimeout = () => reject(new Error('通信がタイムアウトしました'));
+      xhr.onabort = () => reject(new Error('送信を中止しました'));
+
+      xhr.send(payload);
+    });
+  }
+
+  /**
    * 読み取り系の呼び出しを、通信エラーのときだけ自動で再試行します。
    *
    * 会場の回線では 1 回の取りこぼしが普通に起きます。旧版は 1 回失敗すると
@@ -1537,7 +1608,9 @@
 
           try {
             const dataUrl = await blobToDataUrl(item.blob);
-            await callApi('upload', {
+
+            beginUploadProgress(item);
+            await postUpload({
               base64Data: dataUrl,
               userName: item.userName,
               // 同じ写真の再送だとサーバーが判別できるようにします（二重登録の防止）
@@ -1548,12 +1621,10 @@
                  別に持ちます。1 以上なら、サーバーは Drive を見て
                  前回のタイムアウトで既に保存済みでないかを確認します。 */
               attempt: item.sendAttempts || 0
-            }, {
-              // 動画は容量が桁違いなので待ち時間を長く取ります
-              timeout: item.kind === 'video'
-                ? CONFIG.VIDEO_UPLOAD_TIMEOUT_MS
-                : CONFIG.UPLOAD_TIMEOUT_MS
-            });
+            },
+            // 動画は容量が桁違いなので待ち時間を長く取ります
+            item.kind === 'video' ? CONFIG.VIDEO_UPLOAD_TIMEOUT_MS : CONFIG.UPLOAD_TIMEOUT_MS,
+            onUploadProgress);
 
             await Queue.remove(key);
             handled.add(key);
@@ -1561,8 +1632,10 @@
             succeeded++;
             consecutiveFailures = 0;
             state.pendingCount = Math.max(0, state.pendingCount - 1);
-            updateQueueBadge();
+            endUploadProgress();
           } catch (error) {
+            endUploadProgress();
+
             /* 受付終了。何度送っても通らないので、リトライせず即座に打ち切ります。
                写真は端末に残るので「端末に保存する」で取り出せます。 */
             if (error.uploadClosed) {
@@ -1633,6 +1706,7 @@
       }
     } finally {
       state.isQueueRunning = false;
+      endUploadProgress();
       await refreshQueueCounts();
       updatePendingBanner();
     }
@@ -1739,16 +1813,68 @@
     }
   }
 
+  /* ── 送信中の進捗 ─────────────────────────────────────
+     動画は 1 本 3MB 前後あり、無反応に見える時間が長くなります。
+     画面を覆わないよう、既にある同期バッジの中を進捗ゲージにします。 */
+  function beginUploadProgress(item) {
+    state.upload = {
+      active: true,
+      isVideo: item.kind === 'video',
+      bytes: item.blob ? item.blob.size : 0,
+      ratio: 0,
+      processing: false
+    };
+    updateQueueBadge();
+  }
+
+  function onUploadProgress(loaded, total) {
+    if (!state.upload.active) return;
+    if (loaded < 0) {
+      // 送信完了。ここからはサーバー側の処理待ちです
+      state.upload.processing = true;
+      state.upload.ratio = 1;
+    } else {
+      state.upload.ratio = total > 0 ? Math.min(1, loaded / total) : 0;
+    }
+    updateQueueBadge();
+  }
+
+  function endUploadProgress() {
+    state.upload = { active: false, isVideo: false, bytes: 0, ratio: 0, processing: false };
+    updateQueueBadge();
+  }
+
+  const formatMb = (bytes) => (bytes / 1048576).toFixed(1) + 'MB';
+
   function updateQueueBadge() {
     const count = state.pendingCount;
+    const up = state.upload;
+
     if (count > 0) {
       // 圏外なのに「送信中」と出すのは嘘になります
       const waiting = navigator.onLine === false;
-      els.queueBadgeText.textContent = waiting
-        ? count + ' 枚：電波を待っています'
-        : count + ' 枚を送信中…';
+      let label;
+
+      if (waiting) {
+        label = count + ' 件：電波を待っています';
+      } else if (up.active) {
+        const what = up.isVideo ? '動画' : '写真';
+        label = up.processing
+          ? what + 'を保存しています…'
+          : what + ' ' + Math.round(up.ratio * 100) + '%'
+            + (up.bytes ? '（' + formatMb(up.bytes) + '）' : '')
+            + (count > 1 ? ' ・残り ' + count + ' 件' : '');
+      } else {
+        label = count + ' 件を送信中…';
+      }
+
+      els.queueBadgeText.textContent = label;
       els.queueSpinner.hidden = waiting;
       els.queueBadge.classList.toggle('is-warning', waiting);
+      // バッジ自体をゲージにします（別の要素を足すと画面を邪魔するため）
+      els.queueBadge.style.setProperty('--progress',
+        (up.active && !waiting ? up.ratio * 100 : 0) + '%');
+      els.queueBadge.classList.toggle('has-progress', up.active && !waiting);
       els.queueBadge.style.display = 'flex';
     } else if (state.failedCount > 0) {
       els.queueBadgeText.textContent = '⚠️ ' + state.failedCount + ' 枚が未送信';
@@ -1757,6 +1883,7 @@
       els.queueBadge.style.display = 'flex';
     } else {
       els.queueBadge.style.display = 'none';
+      els.queueBadge.classList.remove('has-progress');
     }
   }
 
