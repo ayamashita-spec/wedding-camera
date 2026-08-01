@@ -229,6 +229,42 @@
     }
     .switch-cam-btn[hidden] { display: none; }
 
+    /* ── 直近に撮った写真 ─────────────────────────────────
+       「本当に撮れたのか」がゲストの一番の不安なので、
+       サーバーの応答を待たずにキューの Blob から即座に出します。 */
+    .recent-shots {
+      display: flex; gap: 6px; align-items: center; justify-content: center;
+      margin-bottom: 10px; min-height: 44px;
+    }
+    .recent-shot {
+      position: relative; width: 44px; height: 44px; border-radius: 8px;
+      overflow: hidden; border: 2px solid rgba(255,255,255,0.85);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4); flex: none;
+      animation: shotIn 0.25s ease-out;
+    }
+    @keyframes shotIn { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: scale(1); } }
+    .recent-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    /* 送信中は少し暗く、完了したらチェックを出します */
+    .recent-shot::after {
+      content: ''; position: absolute; inset: 0;
+      background: rgba(0,0,0,0.45); transition: opacity 0.3s;
+    }
+    .recent-shot.is-sent::after {
+      content: '✓'; background: rgba(58,130,96,0.55); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; font-weight: bold;
+    }
+    .recent-shot.is-failed::after {
+      content: '!'; background: rgba(178,48,44,0.6); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; font-weight: bold;
+    }
+
+    @media (orientation: landscape) {
+      .recent-shots { flex-direction: column; margin-bottom: 0; margin-right: 0; min-height: 0; }
+      .recent-shot { width: 34px; height: 34px; }
+    }
+
     #status {
       font-family: 'Zen Maru Gothic', sans-serif; font-size: 12px; margin-top: 10px;
       color: #fff; min-height: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.8);
@@ -663,6 +699,7 @@
     </div>
 
     <div class="camera-controls-overlay">
+      <div class="recent-shots" id="recentShots" aria-live="polite" aria-label="直近に撮った写真"></div>
       <div class="camera-controls">
         <button class="switch-cam-btn" id="switchCamBtn" data-action="switch-camera" hidden
                 aria-label="前面・背面カメラを切り替える">🔄</button>
@@ -887,6 +924,8 @@
     nextPageToken: null,
     isSelectMode: false,
     isAlbumLoading: false,
+    /** すでにグリッドに描画済みの枚数。差分描画の基点 */
+    renderedCount: 0,
 
     stream: null,
     facingMode: 'environment',
@@ -904,7 +943,10 @@
     preparedFiles: null,
 
     /** 未送信写真を端末に保存するとき、share() 直前まで持っておくファイル */
-    pendingLocalFiles: null
+    pendingLocalFiles: null,
+
+    /** 直近サムネイルの objectURL。revoke 漏れを防ぐため保持します */
+    recentShotUrls: []
   };
 
   const els = {};
@@ -914,7 +956,7 @@
     'displayUserName', 'pendingBanner', 'pendingBannerText', 'btnSavePendingLocal',
     'view-cover', 'view-camera', 'view-album',
     'cameraVideo', 'cameraPlaceholder', 'cameraPlaceholderText', 'btnRetryCamera',
-    'switchCamBtn', 'shutterBtn', 'controlSpacer', 'status',
+    'switchCamBtn', 'shutterBtn', 'controlSpacer', 'status', 'recentShots',
     'btnFullscreenToggle', 'fullscreenLabel', 'iconFullscreen', 'iosFsHint',
     'albumStatus', 'photoGrid', 'albumMore', 'btnLoadMore',
     'btnRefreshAlbum', 'btnSelectToggle', 'selectionToolbar', 'selectedCountText',
@@ -1207,10 +1249,21 @@
     return {
       isPersistent: () => available,
 
+      /** @return {Promise<number>} 採番されたキー。サムネイルの紐づけに使います */
       async add(item) {
-        if (!available) { memoryQueue.push(Object.assign({ id: memoryId++ }, item)); return; }
-        try { await run('readwrite', (store) => store.add(item)); }
-        catch (error) { available = false; memoryQueue.push(Object.assign({ id: memoryId++ }, item)); }
+        if (!available) {
+          const id = memoryId++;
+          memoryQueue.push(Object.assign({ id: id }, item));
+          return id;
+        }
+        try {
+          return await run('readwrite', (store) => store.add(item));
+        } catch (error) {
+          available = false;
+          const id = memoryId++;
+          memoryQueue.push(Object.assign({ id: id }, item));
+          return id;
+        }
       },
 
       async all() {
@@ -1334,6 +1387,7 @@
 
             await Queue.remove(key);
             handled.add(key);
+            markRecentShot(key, 'sent');
             succeeded++;
             consecutiveFailures = 0;
             state.pendingCount = Math.max(0, state.pendingCount - 1);
@@ -1350,6 +1404,7 @@
               item.failed = true;
               await Queue.update(item);
               handled.add(key);
+              markRecentShot(key, 'failed');
               newFailures++;
               state.pendingCount = Math.max(0, state.pendingCount - 1);
               state.failedCount++;
@@ -1638,6 +1693,53 @@
     });
   }
 
+  /* ==========================================================================
+   * 直近に撮った写真
+   * ------------------------------------------------------------------------
+   * 撮影の手応えはテキストだけでは伝わりません。サーバーの応答を待たず、
+   * 手元の Blob からその場でサムネイルを出します。
+   * objectURL は必ず revoke します（披露宴のあいだ撮り続けると溜まるため）。
+   * ======================================================================== */
+  const RECENT_SHOTS_MAX = 3;
+
+  function addRecentShot(queueKey, blob) {
+    const url = URL.createObjectURL(blob);
+
+    const node = document.createElement('div');
+    node.className = 'recent-shot';
+    node.dataset.key = String(queueKey);
+
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = '';
+    node.appendChild(img);
+
+    els.recentShots.appendChild(node);
+    state.recentShotUrls.push({ key: String(queueKey), url: url });
+
+    while (els.recentShots.children.length > RECENT_SHOTS_MAX) {
+      els.recentShots.removeChild(els.recentShots.firstElementChild);
+    }
+    while (state.recentShotUrls.length > RECENT_SHOTS_MAX) {
+      const dropped = state.recentShotUrls.shift();
+      URL.revokeObjectURL(dropped.url);
+    }
+  }
+
+  /** @param {'sent'|'failed'} status */
+  function markRecentShot(queueKey, status) {
+    const node = els.recentShots.querySelector('[data-key="' + String(queueKey) + '"]');
+    if (!node) return;
+    node.classList.remove('is-sent', 'is-failed');
+    node.classList.add(status === 'sent' ? 'is-sent' : 'is-failed');
+  }
+
+  function clearRecentShots() {
+    els.recentShots.innerHTML = '';
+    state.recentShotUrls.forEach((entry) => URL.revokeObjectURL(entry.url));
+    state.recentShotUrls = [];
+  }
+
   function playFlash() {
     els.flashEffect.classList.add('flash-active');
     setTimeout(() => els.flashEffect.classList.remove('flash-active'), 100);
@@ -1661,7 +1763,7 @@
       playFlash();
 
       const blob = await canvasToBlob(canvas);
-      await Queue.add({
+      const queueKey = await Queue.add({
         blob: blob,
         userName: getUserName() || 'ゲスト',
         createdAt: Date.now(),
@@ -1669,6 +1771,9 @@
         clientId: newClientId(),
         retry: 0
       });
+
+      // サーバーの応答を待たず、その場で手応えを返します
+      addRecentShot(queueKey, blob);
 
       await refreshQueueCounts();
 
@@ -1957,6 +2062,7 @@
     stopCamera();
     Fullscreen.exit();
     els.iosFsHint.classList.remove('is-visible');
+    clearRecentShots(); // objectURL を解放します
     document.body.style.overflow = '';
 
     if (target === 'album') {
@@ -2033,6 +2139,7 @@
       state.nextPageToken = null;
       state.selectedIds.clear();
       els.photoGrid.innerHTML = '';
+      state.renderedCount = 0;
       els.albumMore.hidden = true;
       els.albumStatus.textContent = '読み込んでいます…';
     }
@@ -2075,52 +2182,84 @@
     }
   }
 
+  /** タイル 1 枚を組み立てます */
+  function buildGridItem(imgData) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'grid-item';
+    item.dataset.id = imgData.id;
+    item.setAttribute('aria-label', (imgData.uploader || 'ゲスト') + ' さんの写真');
+    if (state.selectedIds.has(imgData.id)) item.classList.add('selected');
+
+    const img = document.createElement('img');
+    img.src = imgData.thumbnailUrl;
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.alt = '';
+    // Drive が一時的に 429 を返すことがあるため 1 回だけ再試行します
+    img.dataset.retried = '0';
+    img.onerror = function () {
+      if (this.dataset.retried === '0') {
+        this.dataset.retried = '1';
+        const self = this;
+        setTimeout(() => { self.src = imgData.thumbnailUrl + '&r=' + Date.now(); }, 1200);
+      } else {
+        item.classList.add('is-broken');
+      }
+    };
+
+    const checkbox = document.createElement('div');
+    checkbox.className = 'select-checkbox';
+    checkbox.textContent = '✓';
+    checkbox.setAttribute('aria-hidden', 'true');
+
+    item.appendChild(img);
+    item.appendChild(checkbox);
+    return item;
+  }
+
   /**
    * グリッドを描画します。
-   * 差分ではなく全描画ですが、ページサイズが 30 なので実用上問題ありません。
+   *
+   * 旧版は毎回 innerHTML = '' で全部作り直していました。90 枚読み込んだ状態で
+   * 「もっと見る」や「選択モード」を押すと 90 枚ぶんの <img> が再生成され、
+   * サムネイルの再取得・レイアウトの飛び・is-broken 状態の喪失が起きていました。
+   * 追加分だけ append し、選択状態はクラスの付け替えだけで反映します。
+   *
+   * @param {boolean} reset true なら作り直します（再読み込み・削除後など）
    */
-  function renderGrid() {
+  function renderGrid(reset) {
     els.photoGrid.classList.toggle('select-mode-active', state.isSelectMode);
-    els.photoGrid.innerHTML = '';
+
+    if (reset) {
+      els.photoGrid.innerHTML = '';
+      state.renderedCount = 0;
+    }
+
+    if (state.renderedCount > state.albumImages.length) {
+      // 想定外（削除などで縮んだ）。安全側に倒して作り直します
+      els.photoGrid.innerHTML = '';
+      state.renderedCount = 0;
+    }
+
+    if (state.renderedCount === state.albumImages.length) {
+      syncSelectionUI();
+      return;
+    }
 
     const fragment = document.createDocumentFragment();
-
-    state.albumImages.forEach((imgData) => {
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'grid-item';
-      item.dataset.id = imgData.id;
-      item.setAttribute('aria-label', (imgData.uploader || 'ゲスト') + ' さんの写真');
-      if (state.selectedIds.has(imgData.id)) item.classList.add('selected');
-
-      const img = document.createElement('img');
-      img.src = imgData.thumbnailUrl;
-      img.loading = 'lazy';
-      img.decoding = 'async';
-      img.alt = '';
-      // Drive が一時的に 429 を返すことがあるため 1 回だけ再試行します
-      img.dataset.retried = '0';
-      img.onerror = function () {
-        if (this.dataset.retried === '0') {
-          this.dataset.retried = '1';
-          const self = this;
-          setTimeout(() => { self.src = imgData.thumbnailUrl + '&r=' + Date.now(); }, 1200);
-        } else {
-          item.classList.add('is-broken');
-        }
-      };
-
-      const checkbox = document.createElement('div');
-      checkbox.className = 'select-checkbox';
-      checkbox.textContent = '✓';
-      checkbox.setAttribute('aria-hidden', 'true');
-
-      item.appendChild(img);
-      item.appendChild(checkbox);
-      fragment.appendChild(item);
-    });
-
+    for (let i = state.renderedCount; i < state.albumImages.length; i++) {
+      fragment.appendChild(buildGridItem(state.albumImages[i]));
+    }
     els.photoGrid.appendChild(fragment);
+    state.renderedCount = state.albumImages.length;
+  }
+
+  /** 選択状態だけを DOM に反映します（タイルは作り直しません） */
+  function syncSelectionUI() {
+    els.photoGrid.querySelectorAll('.grid-item').forEach((el) => {
+      el.classList.toggle('selected', state.selectedIds.has(el.dataset.id));
+    });
   }
 
   function toggleSelectMode() {
@@ -2138,7 +2277,9 @@
       state.selectedIds.clear();
     }
 
-    renderGrid();
+    // クラスの付け替えだけ。サムネイルは再取得しません
+    els.photoGrid.classList.toggle('select-mode-active', state.isSelectMode);
+    syncSelectionUI();
     updateDownloadBarUI();
   }
 
@@ -2483,12 +2624,12 @@
     'toggle-select-mode': toggleSelectMode,
     'select-all': () => {
       state.albumImages.forEach((img) => state.selectedIds.add(img.id));
-      renderGrid();
+      syncSelectionUI();
       updateDownloadBarUI();
     },
     'deselect-all': () => {
       state.selectedIds.clear();
-      renderGrid();
+      syncSelectionUI();
       updateDownloadBarUI();
     },
     'open-download-sheet': openDownloadSheet,
