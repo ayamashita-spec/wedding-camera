@@ -475,7 +475,31 @@
       display: flex; align-items: center; justify-content: center;
     }
     .modal-img-container img { width: 100%; max-height: 60vh; object-fit: contain; display: block; }
-    .modal-actions { padding: 12px 16px; display: flex; justify-content: flex-end; align-items: center; }
+    .modal-actions {
+      padding: 12px 16px; display: flex; justify-content: space-between;
+      align-items: center; gap: 10px;
+    }
+    /* 管理モード専用の削除ボタン。display 指定のあるクラスは
+       標準の [hidden]{display:none} に勝ってしまうので必ず併記します。 */
+    .delete-btn {
+      background: #fff; color: var(--danger); border: 1.5px solid var(--danger);
+      padding: 10px 14px; border-radius: 8px; font-weight: 700; cursor: pointer;
+      font-size: 13px; display: flex; align-items: center; gap: 6px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .delete-btn[hidden] { display: none; }
+    .delete-btn:disabled { opacity: 0.5; }
+    /* 1 回目のタップで確認状態にします（誤タップで消えないように） */
+    .delete-btn.is-confirming { background: var(--danger); color: #fff; }
+
+    /* 受付終了の案内 */
+    .upload-closed-notice {
+      width: 100%; margin-bottom: 16px; padding: 12px 14px; border-radius: 12px;
+      background: #fdf0ef; border: 1px solid #eab9b6; color: #8c3a36;
+      font-size: 12px; line-height: 1.7;
+    }
+    .upload-closed-notice[hidden] { display: none; }
+    .btn-mode-select:disabled { opacity: 0.45; box-shadow: none; }
     .download-btn {
       background: var(--wedding-pink); color: #fff; border: none; padding: 10px 18px;
       border-radius: 8px; font-weight: 700; cursor: pointer;
@@ -645,8 +669,11 @@
         <button class="edit-name-btn" data-action="edit-name">変更</button>
       </div>
 
+      <!-- 受付終了後に出る案内。GAS の UPLOAD_DEADLINE を過ぎると表示されます -->
+      <div class="upload-closed-notice" id="uploadClosedNotice" hidden></div>
+
       <div class="cover-buttons">
-        <button class="btn-mode-select btn-mode-camera" data-action="open-camera">
+        <button class="btn-mode-select btn-mode-camera" id="btnOpenCamera" data-action="open-camera">
           <span aria-hidden="true">📷</span> カメラを起動する
         </button>
         <button class="btn-mode-select btn-mode-album" data-action="open-album">
@@ -764,6 +791,8 @@
       </div>
       <div class="modal-img-container"><img id="modalImg" alt=""></div>
       <div class="modal-actions">
+        <!-- 管理モード（?admin=... で開いた端末）でだけ表示されます -->
+        <button id="modalDeleteBtn" class="delete-btn" hidden>🗑 削除</button>
         <button id="modalDownloadBtn" class="download-btn">⬇️ 保存する</button>
       </div>
     </div>
@@ -912,7 +941,9 @@
 
     JSZIP_URL: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
     STORAGE_KEY_NAME: 'wedding_guest_name',
-    STORAGE_KEY_IOS_HINT: 'wedding_ios_fs_hint'
+    STORAGE_KEY_IOS_HINT: 'wedding_ios_fs_hint',
+    /** 管理者トークン。?admin=... で開いた端末にだけ保存されます */
+    STORAGE_KEY_ADMIN: 'wedding_admin_token'
   };
 
   /* ==========================================================================
@@ -946,7 +977,11 @@
     pendingLocalFiles: null,
 
     /** 直近サムネイルの objectURL。revoke 漏れを防ぐため保持します */
-    recentShotUrls: []
+    recentShotUrls: [],
+
+    /** 写真の受付状況。判定できないときは開いている扱いにします */
+    uploadOpen: true,
+    uploadClosedMessage: ''
   };
 
   const els = {};
@@ -961,7 +996,8 @@
     'albumStatus', 'photoGrid', 'albumMore', 'btnLoadMore',
     'btnRefreshAlbum', 'btnSelectToggle', 'selectionToolbar', 'selectedCountText',
     'downloadBarInfo', 'btnExecDownload',
-    'imageModal', 'modalImg', 'modalUploaderName', 'modalDownloadBtn',
+    'imageModal', 'modalImg', 'modalUploaderName', 'modalDownloadBtn', 'modalDeleteBtn',
+    'uploadClosedNotice', 'btnOpenCamera',
     'nameModal', 'nameInput', 'nameInputHint', 'nameModalCancelBtn',
     'downloadSheet', 'sheetTitle', 'sheetSubtitle', 'optShare', 'optShareTitle', 'optZip', 'optDrive',
     'progressOverlay', 'progressText', 'progressBar', 'progressSubtext', 'btnCancelProgress',
@@ -1000,6 +1036,39 @@
   })();
 
   const getUserName = () => Storage.get(CONFIG.STORAGE_KEY_NAME);
+
+  /* ==========================================================================
+   * 管理モード（新郎新婦だけ）
+   * ------------------------------------------------------------------------
+   * GAS の generateAdminToken() が出す ?admin=... 付き URL を開いた端末だけ、
+   * アルバムに削除ボタンが出ます。トークンは端末に保存し、URL からは消します
+   * （そのまま履歴や共有に残ると、ゲストに渡ってしまうため）。
+   * 実際の可否はサーバー側の assertAdmin() が判定します。
+   * ======================================================================== */
+  const getAdminToken = () => Storage.get(CONFIG.STORAGE_KEY_ADMIN);
+  const isAdmin = () => !!getAdminToken();
+
+  function initAdminMode() {
+    let token = '';
+    try {
+      token = (new URLSearchParams(location.search).get('admin') || '').trim();
+    } catch (error) { return; }
+    if (!token) return;
+
+    // サーバー側と同じ形式だけ受け付けます
+    if (!/^[A-Za-z0-9]{8,64}$/.test(token)) return;
+
+    Storage.set(CONFIG.STORAGE_KEY_ADMIN, token);
+
+    try {
+      const params = new URLSearchParams(location.search);
+      params.delete('admin');
+      const query = params.toString();
+      history.replaceState(null, '', location.pathname + (query ? '?' + query : '') + location.hash);
+    } catch (error) { /* URL を消せなくても動作には支障ありません */ }
+
+    toast('管理モードで開きました。写真を1枚ずつ削除できます。', 'success', 6000);
+  }
 
   function ensureJpgName(name) {
     if (!name) return 'wedding_photo.jpg';
@@ -1159,6 +1228,8 @@
       if (!json.success) {
         const error = new Error(json.error || '不明なエラー');
         error.isServerError = true;
+        // 受付終了。何度送っても通らないので、リトライさせません
+        if (json.closed) error.uploadClosed = true;
         throw error;
       }
       return json;
@@ -1342,6 +1413,7 @@
     let succeeded = 0;
     let newFailures = 0;
     let circuitOpen = false;
+    let uploadClosedHit = false;
     const handled = new Set(); // 打ち切り済み・消えた項目を再読み込みしないため
 
     try {
@@ -1393,6 +1465,25 @@
             state.pendingCount = Math.max(0, state.pendingCount - 1);
             updateQueueBadge();
           } catch (error) {
+            /* 受付終了。何度送っても通らないので、リトライせず即座に打ち切ります。
+               写真は端末に残るので「端末に保存する」で取り出せます。 */
+            if (error.uploadClosed) {
+              item.failed = true;
+              item.sendAttempts = (item.sendAttempts || 0) + 1;
+              await Queue.update(item);
+              handled.add(key);
+              markRecentShot(key, 'failed');
+              state.pendingCount = Math.max(0, state.pendingCount - 1);
+              state.failedCount++;
+              state.uploadOpen = false;
+              state.uploadClosedMessage = error.message;
+              applyUploadStatusUI();
+              updateQueueBadge();
+              uploadClosedHit = true;
+              stop = true;
+              break;
+            }
+
             item.retry = (item.retry || 0) + 1;
             // こちらは巻き戻しません（サーバー側の二重登録チェックの判断材料）
             item.sendAttempts = (item.sendAttempts || 0) + 1;
@@ -1432,7 +1523,10 @@
       }
 
       // 通知は 1 本にまとめます（枚数ぶん出すと画面が埋まります）
-      if (circuitOpen) {
+      if (uploadClosedHit) {
+        toast(state.uploadClosedMessage
+          + '未送信の写真は表紙画面の「端末に保存する」で取り出せます。', 'error', 9000);
+      } else if (circuitOpen) {
         toast('いま送信できませんでした。電波の良い場所で、表紙画面から再送してください。', 'error', 7000);
       } else if (newFailures > 0) {
         toast(newFailures + ' 枚を送信できませんでした。表紙画面から再送できます。', 'error', 7000);
@@ -1582,6 +1676,36 @@
       state.pendingLocalFiles = null;
       els.btnSavePendingLocal.textContent = '端末に保存する';
     }
+  }
+
+  /* ==========================================================================
+   * 受付期間
+   * ------------------------------------------------------------------------
+   * GAS のスクリプトプロパティ UPLOAD_DEADLINE を過ぎると受付が閉じます。
+   * サーバー側が本当の関所で、ここは案内のためのものです。
+   * ======================================================================== */
+  async function refreshUploadStatus() {
+    try {
+      const response = await callApi('getStatus', {}, { timeout: 15000 });
+      const data = response.data || {};
+      state.uploadOpen = data.uploadOpen !== false;
+      state.uploadClosedMessage = data.closedMessage || '';
+    } catch (error) {
+      /* 判定できないときは「開いている」に倒します。
+         撮れるのに撮らせない方が、取り返しがつかないためです。 */
+      console.warn('[status] 受付状況を取得できませんでした', error.message);
+      state.uploadOpen = true;
+      state.uploadClosedMessage = '';
+    }
+    applyUploadStatusUI();
+  }
+
+  function applyUploadStatusUI() {
+    const closed = !state.uploadOpen;
+    els.uploadClosedNotice.hidden = !closed;
+    els.uploadClosedNotice.textContent = state.uploadClosedMessage
+      || '写真の受付は終了しました。アルバムはこれまでどおりご覧いただけます。';
+    els.btnOpenCamera.disabled = closed;
   }
 
   /* ==========================================================================
@@ -2323,7 +2447,67 @@
     button.disabled = false;
     button.onclick = () => saveSinglePhoto(imgData, button);
 
+    // 削除は管理モードの端末だけ
+    resetDeleteButton();
+    els.modalDeleteBtn.hidden = !isAdmin();
+    els.modalDeleteBtn.onclick = () => confirmDeletePhoto(imgData);
+
     openOverlay(els.imageModal);
+  }
+
+  /* ── 写真の削除（管理モード） ─────────────────────────────
+     誤タップで消えないよう 2 段階にします。1 回目で確認状態になり、
+     4 秒放置すると元に戻ります。 */
+  let deleteConfirmTimer = null;
+
+  function resetDeleteButton() {
+    clearTimeout(deleteConfirmTimer);
+    els.modalDeleteBtn.classList.remove('is-confirming');
+    els.modalDeleteBtn.textContent = '🗑 削除';
+    els.modalDeleteBtn.disabled = false;
+  }
+
+  function confirmDeletePhoto(imgData) {
+    const button = els.modalDeleteBtn;
+    if (!button.classList.contains('is-confirming')) {
+      button.classList.add('is-confirming');
+      button.textContent = '⚠️ もう一度押すと削除';
+      clearTimeout(deleteConfirmTimer);
+      deleteConfirmTimer = setTimeout(resetDeleteButton, 4000);
+      return;
+    }
+    clearTimeout(deleteConfirmTimer);
+    deletePhoto(imgData);
+  }
+
+  async function deletePhoto(imgData) {
+    const button = els.modalDeleteBtn;
+    button.disabled = true;
+    button.textContent = '削除しています…';
+
+    try {
+      await callApi('deletePhoto', { fileId: imgData.id, adminToken: getAdminToken() });
+
+      // 手元の一覧からも取り除きます（再読み込みを待たせないため）
+      state.albumImages = state.albumImages.filter((img) => img.id !== imgData.id);
+      state.selectedIds.delete(imgData.id);
+      closeImageModal();
+      renderGrid(true); // 1 枚抜けたのでインデックスを取り直します
+      updateDownloadBarUI();
+
+      if (state.albumImages.length === 0) {
+        els.albumStatus.innerHTML =
+          '<strong>まだ写真がありません</strong>最初の 1 枚を撮ってみませんか📸';
+        els.albumStatus.style.display = 'block';
+      }
+
+      toast('削除しました。Drive のゴミ箱から 30 日以内なら戻せます。', 'success', 7000);
+    } catch (error) {
+      console.error('[deletePhoto]', error);
+      toast('削除できませんでした。' + error.message, 'error', 6000);
+    } finally {
+      resetDeleteButton();
+    }
   }
 
   function closeImageModal() {
@@ -2714,9 +2898,14 @@
 
     els.status.textContent = '';
     checkInAppBrowser();
+    initAdminMode();
     updateUserNameDisplay();
     syncFullscreenUI();
+    applyUploadStatusUI();
     wireEvents();
+
+    // 受付状況の確認。起動を待たせないので await しません
+    refreshUploadStatus();
 
     if (!CONFIG.API_URL || CONFIG.API_URL.indexOf('/exec') === -1) {
       toast('API の URL が設定されていません。管理者にお知らせください。', 'error', 9000);
