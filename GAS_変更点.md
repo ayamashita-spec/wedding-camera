@@ -364,3 +364,17 @@ function toClientImage(file) {
 > 不要との判断でバージョン 39 で撤去しました。削除が必要なときは
 > Drive のフォルダを直接開いて操作してください。公開エンドポイントに
 > 削除 API を置かないぶん安全です。
+
+## 第3弾（適用済み・バージョン 40 / 2026-08-02）
+
+動画に対応しました。**こちらも適用済みです。**
+
+- `MAX_UPLOAD_BYTES_VIDEO`（30MB）を追加し、写真と動画で上限を分けた
+- data URL の判定を `image/` から `image|video/` に拡張
+- 保存時の拡張子を MIME から決める `extensionFor()` を追加（`.mp4` / `.webm` など）
+- `getFileInTargetFolder` が動画も通すようにした（従来は画像以外を拒否）
+- 一覧のクエリを `image/ または video/` に変更し、`mimeType` を取得フィールドに追加
+- クライアントへ `mimeType` と `isVideo` を返すようにした
+
+> 動画の長さはフロント側（`CONFIG.VIDEO_MAX_SEC`）だけで決まります。
+> サーバーは 30MB まで許容してあるので、**長さを変えても GAS の再デプロイは不要**です。

@@ -215,6 +215,61 @@
     }
     .shutter-btn-visual:active { transform: scale(0.90); }
     .shutter-btn-visual:disabled { opacity: 0.55; }
+    /* 録画中は赤くして、残り時間をリング状に減らしていきます */
+    .shutter-btn-visual.is-recording {
+      border-color: var(--danger); color: var(--danger);
+      box-shadow: 0 0 25px rgba(217, 83, 79, 0.7);
+    }
+    .shutter-ring {
+      position: absolute; inset: -4px; border-radius: 50%;
+      pointer-events: none; display: none;
+    }
+    .shutter-btn-visual.is-recording .shutter-ring { display: block; }
+    .shutter-ring circle {
+      fill: none; stroke: var(--danger); stroke-width: 4; stroke-linecap: round;
+      transform: rotate(-90deg); transform-origin: 50% 50%;
+    }
+
+    /* ── 写真 / 動画の切り替え ───────────────────────────── */
+    .mode-switch {
+      display: flex; gap: 4px; padding: 3px; margin-bottom: 12px;
+      background: rgba(0, 0, 0, 0.5); border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+    }
+    .mode-switch button {
+      background: none; border: none; color: rgba(255, 255, 255, 0.75);
+      font-size: 11px; font-weight: 700; padding: 6px 16px; border-radius: 16px;
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
+    }
+    .mode-switch button.is-active { background: #fff; color: #333; }
+    .mode-switch[hidden] { display: none; }
+
+    /* 録画中の残り時間 */
+    .rec-timer {
+      display: none; align-items: center; gap: 6px; margin-bottom: 8px;
+      color: #fff; font-size: 12px; font-weight: 700;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+    }
+    .rec-timer.is-visible { display: flex; }
+    .rec-timer .rec-dot {
+      width: 9px; height: 9px; border-radius: 50%; background: var(--danger);
+      animation: recBlink 1s steps(2, start) infinite;
+    }
+    @keyframes recBlink { 50% { opacity: 0.25; } }
+
+    /* アルバムの動画タイル */
+    .grid-item .video-badge {
+      position: absolute; left: 6px; bottom: 6px; z-index: 8;
+      display: flex; align-items: center; gap: 3px;
+      padding: 2px 6px; border-radius: 10px;
+      background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 9px; font-weight: 700;
+      pointer-events: none;
+    }
+    .modal-video-wrap {
+      position: relative; width: 100%; background: #000;
+      aspect-ratio: 16 / 9;
+    }
+    .modal-video-wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
     .shutter-icon { font-size: 30px; line-height: 1; }
     .shutter-label {
       font-size: 9px; font-weight: 700; letter-spacing: 1px;
@@ -245,7 +300,12 @@
       animation: shotIn 0.25s ease-out;
     }
     @keyframes shotIn { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: scale(1); } }
-    .recent-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .recent-shot img,
+    .recent-shot video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .recent-shot .video-badge {
+      position: absolute; left: 3px; bottom: 2px; z-index: 2;
+      color: #fff; font-size: 9px; text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    }
     /* 送信中は少し暗く、完了したらチェックを出します */
     .recent-shot::after {
       content: ''; position: absolute; inset: 0;
@@ -679,7 +739,7 @@
       </div>
 
       <!-- 端末のカメラロールから選ぶための入力。ボタンから click() します -->
-      <input type="file" id="filePicker" accept="image/*" multiple hidden>
+      <input type="file" id="filePicker" accept="image/*,video/*" multiple hidden>
 
     </div>
 
@@ -741,12 +801,27 @@
 
     <div class="camera-controls-overlay">
       <div class="recent-shots" id="recentShots" aria-live="polite" aria-label="直近に撮った写真"></div>
+
+      <div class="rec-timer" id="recTimer" role="status" aria-live="polite">
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span id="recTimerText">録画中</span>
+      </div>
+
+      <!-- MediaRecorder が使えない端末では出しません -->
+      <div class="mode-switch" id="modeSwitch" hidden>
+        <button data-action="mode-photo" id="btnModePhoto" class="is-active">写真</button>
+        <button data-action="mode-video" id="btnModeVideo">動画</button>
+      </div>
+
       <div class="camera-controls">
         <button class="switch-cam-btn" id="switchCamBtn" data-action="switch-camera" hidden
                 aria-label="前面・背面カメラを切り替える">🔄</button>
         <button class="shutter-btn-visual" id="shutterBtn" data-action="shoot" aria-label="撮影する">
-          <span class="shutter-icon" aria-hidden="true">📷</span>
-          <span class="shutter-label">SHOOT</span>
+          <svg class="shutter-ring" id="shutterRing" viewBox="0 0 100 100" aria-hidden="true">
+            <circle id="shutterRingArc" cx="50" cy="50" r="46"></circle>
+          </svg>
+          <span class="shutter-icon" id="shutterIcon" aria-hidden="true">📷</span>
+          <span class="shutter-label" id="shutterLabel">SHOOT</span>
         </button>
         <div id="controlSpacer" style="width: 44px;" hidden></div>
       </div>
@@ -803,7 +878,11 @@
           <span id="modalUploaderName">ゲスト</span>
         </div>
       </div>
-      <div class="modal-img-container"><img id="modalImg" alt=""></div>
+      <div class="modal-img-container" id="modalImgWrap"><img id="modalImg" alt=""></div>
+      <!-- 動画は Drive のプレビューで再生します（全体をダウンロードせずに済むため） -->
+      <div class="modal-video-wrap" id="modalVideoWrap" hidden>
+        <iframe id="modalVideo" allow="autoplay; fullscreen" allowfullscreen title="動画"></iframe>
+      </div>
       <div class="modal-actions">
         <button id="modalDownloadBtn" class="download-btn">⬇️ 保存する</button>
       </div>
@@ -957,7 +1036,22 @@
     STORAGE_KEY_ROTATE_HINT: 'wedding_rotate_hint',
 
     /** 1 回のアップロードで選べる枚数の上限。端末のメモリを守るため */
-    PICK_MAX: 30
+    PICK_MAX: 30,
+
+    /* --- 動画 -------------------------------------------------------------
+       写真と違い、動画は容量がそのまま送信時間になります。GAS へは Base64
+       （1.33 倍に膨らむ）で送るため、会場の回線では長い動画ほど失敗します。
+       15 秒 / 1.5Mbps なら 1 本 3MB 前後で、Base64 でも 4MB 程度に収まります。
+       長さを変えたいときはここだけ直してください（サーバー側は 30MB まで許容）。 */
+    VIDEO_MAX_SEC: 15,
+    VIDEO_BITS_PER_SEC: 1500000,
+    VIDEO_AUDIO_BITS_PER_SEC: 64000,
+    /** 録画の解像度の希望値。実際に何が返るかは端末次第です */
+    VIDEO_IDEAL_HEIGHT: 720,
+    /** 送信前の安全弁。これを超えたら送らずに知らせます */
+    VIDEO_MAX_BYTES: 25 * 1024 * 1024,
+    /** 動画は重いので専用のタイムアウトにします */
+    VIDEO_UPLOAD_TIMEOUT_MS: 180000
   };
 
   /* ==========================================================================
@@ -999,7 +1093,16 @@
 
     /** 傾きセンサーで判定した端末の向き。null は「まだ分からない」 */
     physicalLandscape: null,
-    orientationSensorOn: false
+    orientationSensorOn: false,
+
+    /** 'photo' | 'video' */
+    captureKind: 'photo',
+    isRecording: false,
+    recorder: null,
+    recordTimer: null,
+    recordStartedAt: 0,
+    /** 音声トラックつきのストリームを掴んでいるか */
+    streamHasAudio: false
   };
 
   const els = {};
@@ -1010,6 +1113,9 @@
     'view-cover', 'view-camera', 'view-album',
     'cameraVideo', 'cameraPlaceholder', 'cameraPlaceholderText', 'btnRetryCamera',
     'switchCamBtn', 'shutterBtn', 'controlSpacer', 'status', 'recentShots',
+    'shutterIcon', 'shutterLabel', 'shutterRingArc', 'recTimer', 'recTimerText',
+    'modeSwitch', 'btnModePhoto', 'btnModeVideo',
+    'modalImgWrap', 'modalVideoWrap', 'modalVideo',
     'btnFullscreenToggle', 'fullscreenLabel', 'iconFullscreen', 'iosFsHint',
     'rotateHint', 'rotateHintOs', 'btnEnableTilt', 'btnPickPhotos', 'filePicker',
     'albumStatus', 'photoGrid', 'albumMore', 'btnLoadMore',
@@ -1442,7 +1548,12 @@
                  別に持ちます。1 以上なら、サーバーは Drive を見て
                  前回のタイムアウトで既に保存済みでないかを確認します。 */
               attempt: item.sendAttempts || 0
-            }, { timeout: CONFIG.UPLOAD_TIMEOUT_MS });
+            }, {
+              // 動画は容量が桁違いなので待ち時間を長く取ります
+              timeout: item.kind === 'video'
+                ? CONFIG.VIDEO_UPLOAD_TIMEOUT_MS
+                : CONFIG.UPLOAD_TIMEOUT_MS
+            });
 
             await Queue.remove(key);
             handled.add(key);
@@ -1873,17 +1984,33 @@
    * ======================================================================== */
   const RECENT_SHOTS_MAX = 3;
 
-  function addRecentShot(queueKey, blob) {
+  function addRecentShot(queueKey, blob, isVideo) {
     const url = URL.createObjectURL(blob);
 
     const node = document.createElement('div');
     node.className = 'recent-shot';
     node.dataset.key = String(queueKey);
 
-    const img = document.createElement('img');
-    img.src = url;
-    img.alt = '';
-    node.appendChild(img);
+    if (isVideo) {
+      /* 動画は 1 コマ目を出します。muted + playsinline にしないと
+         iOS でインライン再生が拒否されてサムネイルが出ません。 */
+      const video = document.createElement('video');
+      video.src = url;
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = 'metadata';
+      node.appendChild(video);
+
+      const mark = document.createElement('span');
+      mark.className = 'video-badge';
+      mark.textContent = '▶';
+      node.appendChild(mark);
+    } else {
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = '';
+      node.appendChild(img);
+    }
 
     els.recentShots.appendChild(node);
     state.recentShotUrls.push({ key: String(queueKey), url: url });
@@ -1918,6 +2045,10 @@
 
   async function onShutter() {
     if (!getUserName()) { askUserName('camera'); return; }
+
+    // 動画モードは録画の開始／停止に振り分けます
+    if (state.captureKind === 'video') { await toggleRecording(); return; }
+
     if (!state.stream) { await initCamera(); return; }
     if (state.isCapturing) return; // 連打ガード
 
@@ -2036,29 +2167,44 @@
     const files = all.slice(0, CONFIG.PICK_MAX);
     const overflow = all.length - files.length;
 
-    showProgress('写真を読み込んでいます…', 'この画面を開いたままお待ちください');
+    showProgress('読み込んでいます…', 'この画面を開いたままお待ちください');
     let added = 0;
     let skipped = 0;
+    let tooLarge = 0;
 
     try {
       for (let i = 0; i < files.length; i++) {
         if (state.cancelRequested) break;
+        const file = files[i];
         updateProgress('読み込んでいます… ' + (i + 1) + '/' + files.length, i / files.length);
 
+        const isVideo = /^video\//.test(file.type);
+
         try {
-          const blob = await fileToUploadBlob(files[i]);
+          let blob;
+          if (isVideo) {
+            /* 動画は再エンコードできないので、そのまま送ります。
+               大きすぎるものは通信が持たないため、ここで弾きます。 */
+            if (file.size > CONFIG.VIDEO_MAX_BYTES) { tooLarge++; continue; }
+            blob = file;
+          } else {
+            blob = await fileToUploadBlob(file);
+          }
+
           await Queue.add({
             blob: blob,
             userName: getUserName() || 'ゲスト',
             /* 撮影時刻はファイルの更新日時を使います。これでアルバムが
                「アップロードした順」ではなく「撮った順」に並びます。 */
-            createdAt: files[i].lastModified || Date.now(),
+            createdAt: file.lastModified || Date.now(),
             clientId: newClientId(),
+            kind: isVideo ? 'video' : 'photo',
+            mimeType: isVideo ? (file.type || 'video/mp4') : 'image/jpeg',
             retry: 0
           });
           added++;
         } catch (error) {
-          console.warn('[pick] 読み込めませんでした', files[i].name, error.message);
+          console.warn('[pick] 読み込めませんでした', file.name, error.message);
           skipped++;
         }
       }
@@ -2070,16 +2216,275 @@
     updatePendingBanner();
 
     if (added === 0) {
-      toast('写真を読み込めませんでした。別の写真でお試しください。', 'error', 6000);
+      if (tooLarge > 0) {
+        toast('動画のサイズが大きすぎます（上限 '
+          + Math.round(CONFIG.VIDEO_MAX_BYTES / 1048576) + 'MB）。短いものをお選びください。', 'error', 8000);
+      } else {
+        toast('読み込めませんでした。別のファイルでお試しください。', 'error', 6000);
+      }
       return;
     }
 
-    let message = added + ' 枚を送信します。';
-    if (skipped > 0) message += ' ' + skipped + ' 枚は読み込めませんでした。';
-    if (overflow > 0) message += ' 一度に選べるのは ' + CONFIG.PICK_MAX + ' 枚までです。';
+    let message = added + ' 件を送信します。';
+    if (skipped > 0) message += ' ' + skipped + ' 件は読み込めませんでした。';
+    if (tooLarge > 0) message += ' ' + tooLarge + ' 本の動画は大きすぎるため除きました。';
+    if (overflow > 0) message += ' 一度に選べるのは ' + CONFIG.PICK_MAX + ' 件までです。';
     toast(message, 'success', 7000);
 
     processQueue();
+  }
+
+  /* ==========================================================================
+   * 動画の録画
+   * ------------------------------------------------------------------------
+   * 容量がそのまま送信時間になるため、長さとビットレートを絞ります。
+   * 音声は動画モードに入ったときだけ要求します（写真しか撮らない人に
+   * マイクの許可を求めないため）。
+   * ======================================================================== */
+
+  /* 端末が録画できる形式を選びます。mp4 を優先（Drive でも端末でも扱いやすい）。
+     音声コーデックを含む MIME を、音声トラックの無いストリームに指定すると
+     MediaRecorder はエラーも出さず 0 バイトの録画を返します。マイクを
+     拒否されたときに無言で失敗するため、音声の有無で候補を分けます。 */
+  const VIDEO_MIME_WITH_AUDIO = [
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus'
+  ];
+  const VIDEO_MIME_SILENT = [
+    'video/mp4;codecs=avc1.42E01E',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8'
+  ];
+  const VIDEO_MIME_GENERIC = ['video/mp4', 'video/webm'];
+
+  function pickRecorderMime(hasAudio) {
+    if (typeof MediaRecorder === 'undefined') return null;
+    if (!MediaRecorder.isTypeSupported) return '';
+    const candidates = (hasAudio ? VIDEO_MIME_WITH_AUDIO : VIDEO_MIME_SILENT)
+      .concat(VIDEO_MIME_GENERIC);
+    for (const mime of candidates) {
+      if (MediaRecorder.isTypeSupported(mime)) return mime;
+    }
+    return '';
+  }
+
+  const canRecordVideo = () =>
+    typeof MediaRecorder !== 'undefined' && pickRecorderMime(true) !== null;
+
+  /** 'video/mp4;codecs=...' → '.mp4' */
+  function extensionForMime(mime) {
+    const base = String(mime || '').split(';')[0].trim().toLowerCase();
+    if (base === 'video/mp4') return '.mp4';
+    if (base === 'video/webm') return '.webm';
+    if (base === 'video/quicktime') return '.mov';
+    return '.mp4';
+  }
+
+  function setShutterAppearance() {
+    const recording = state.isRecording;
+    const video = state.captureKind === 'video';
+    els.shutterBtn.classList.toggle('is-recording', recording);
+    els.shutterIcon.textContent = recording ? '⏹' : (video ? '🎬' : '📷');
+    els.shutterLabel.textContent = recording ? 'STOP' : (video ? 'REC' : 'SHOOT');
+    els.shutterBtn.setAttribute('aria-label',
+      recording ? '録画を停止する' : (video ? '録画を開始する' : '撮影する'));
+  }
+
+  function setCaptureKind(kind) {
+    if (state.isRecording) return; // 録画中は切り替えさせません
+    state.captureKind = kind;
+    els.btnModePhoto.classList.toggle('is-active', kind === 'photo');
+    els.btnModeVideo.classList.toggle('is-active', kind === 'video');
+    setShutterAppearance();
+    setStatus(kind === 'video'
+      ? '🎬 最大 ' + CONFIG.VIDEO_MAX_SEC + ' 秒まで録画できます'
+      : '');
+  }
+
+  function syncModeSwitch() {
+    els.modeSwitch.hidden = !canRecordVideo();
+    if (!canRecordVideo() && state.captureKind === 'video') setCaptureKind('photo');
+  }
+
+  const RING_CIRCUMFERENCE = 2 * Math.PI * 46;
+
+  function updateRecRing(remainingRatio) {
+    els.shutterRingArc.style.strokeDasharray = RING_CIRCUMFERENCE;
+    els.shutterRingArc.style.strokeDashoffset = RING_CIRCUMFERENCE * (1 - remainingRatio);
+  }
+
+  async function toggleRecording() {
+    if (state.isRecording) { stopRecording(); return; }
+    await startRecording();
+  }
+
+  async function startRecording() {
+    if (!state.stream) { await initCamera(); if (!state.stream) return; }
+
+    // 音声つきで取り直します。写真だけの人にマイクを求めないための遅延要求です
+    if (!state.streamHasAudio) {
+      const ok = await restartCameraWithAudio();
+      if (!ok) return;
+    }
+
+    /* MIME はストリームの実態に合わせます。state.streamHasAudio ではなく
+       トラックを直接見るのは、拒否や端末都合で食い違うことがあるためです。 */
+    const hasAudio = state.stream.getAudioTracks().length > 0;
+    const mime = pickRecorderMime(hasAudio);
+
+    let recorder;
+    try {
+      const options = { videoBitsPerSecond: CONFIG.VIDEO_BITS_PER_SEC };
+      if (hasAudio) options.audioBitsPerSecond = CONFIG.VIDEO_AUDIO_BITS_PER_SEC;
+      if (mime) options.mimeType = mime;
+      recorder = new MediaRecorder(state.stream, options);
+    } catch (error) {
+      console.error('[rec] MediaRecorder を作れません', error);
+      // ビットレート指定を落として再挑戦します
+      try { recorder = new MediaRecorder(state.stream); }
+      catch (retryError) {
+        toast('この端末では録画できませんでした。写真でお試しください。', 'error', 6000);
+        setCaptureKind('photo');
+        return;
+      }
+    }
+
+    const chunks = [];
+    recorder.ondataavailable = (event) => { if (event.data && event.data.size) chunks.push(event.data); };
+    recorder.onerror = (event) => {
+      console.error('[rec] 録画エラー', event.error);
+      toast('録画中に問題が発生しました。', 'error');
+      stopRecording();
+    };
+    recorder.onstop = () => finishRecording(chunks, recorder.mimeType || mime || 'video/mp4');
+
+    state.recorder = recorder;
+    state.isRecording = true;
+    state.recordStartedAt = Date.now();
+    els.switchCamBtn.disabled = true;
+    els.modeSwitch.style.opacity = '0.4';
+    setShutterAppearance();
+    els.recTimer.classList.add('is-visible');
+    updateRecRing(1);
+
+    try { recorder.start(); } catch (error) {
+      console.error('[rec] start 失敗', error);
+      resetRecordingUi();
+      toast('録画を開始できませんでした。', 'error');
+      return;
+    }
+
+    // 残り時間の表示と自動停止
+    state.recordTimer = setInterval(() => {
+      const elapsed = (Date.now() - state.recordStartedAt) / 1000;
+      const remaining = Math.max(0, CONFIG.VIDEO_MAX_SEC - elapsed);
+      els.recTimerText.textContent = '録画中  残り ' + Math.ceil(remaining) + ' 秒';
+      updateRecRing(remaining / CONFIG.VIDEO_MAX_SEC);
+      if (remaining <= 0) stopRecording();
+    }, 100);
+  }
+
+  function stopRecording() {
+    if (!state.isRecording) return;
+    clearInterval(state.recordTimer);
+    state.recordTimer = null;
+    try { state.recorder.stop(); } catch (error) { console.warn('[rec] stop', error.message); }
+    // 実際の後始末は onstop（finishRecording）で行います
+  }
+
+  function resetRecordingUi() {
+    state.isRecording = false;
+    state.recorder = null;
+    clearInterval(state.recordTimer);
+    state.recordTimer = null;
+    els.recTimer.classList.remove('is-visible');
+    els.switchCamBtn.disabled = false;
+    els.modeSwitch.style.opacity = '';
+    setShutterAppearance();
+  }
+
+  async function finishRecording(chunks, mimeType) {
+    const seconds = (Date.now() - state.recordStartedAt) / 1000;
+    resetRecordingUi();
+
+    if (!chunks.length) {
+      // 無言で 0 バイトになるのが一番わかりにくいので、はっきり伝えます
+      console.error('[rec] 録画データが空です', { mimeType: mimeType, seconds: seconds });
+      toast('録画できませんでした。もう一度お試しください。', 'error', 6000);
+      return;
+    }
+    if (seconds < 0.7) {
+      setTransientStatus('短すぎます。長押しで録画してください。', true, 3000);
+      return;
+    }
+
+    const blob = new Blob(chunks, { type: mimeType });
+
+    if (blob.size > CONFIG.VIDEO_MAX_BYTES) {
+      toast('動画が大きすぎて送信できません（' + Math.round(blob.size / 1048576) + 'MB）。'
+        + 'もっと短く撮ってください。', 'error', 8000);
+      return;
+    }
+
+    try {
+      const queueKey = await Queue.add({
+        blob: blob,
+        userName: getUserName() || 'ゲスト',
+        createdAt: Date.now(),
+        clientId: newClientId(),
+        kind: 'video',
+        mimeType: mimeType,
+        retry: 0
+      });
+      addRecentShot(queueKey, blob, true);
+      await refreshQueueCounts();
+
+      const mb = (blob.size / 1048576).toFixed(1);
+      setStatus(navigator.onLine === false
+        ? '📵 電波を待っています（' + mb + 'MB）'
+        : '📤 送信しています… ' + mb + 'MB');
+      processQueue();
+    } catch (error) {
+      console.error('[rec] キューに入れられません', error);
+      toast('動画を保存できませんでした。', 'error');
+    }
+  }
+
+  /**
+   * 音声つきでカメラを取り直します。
+   * マイクを拒否された場合は、映像だけで録画を続けます（無音より撮れない方が困るため）。
+   */
+  async function restartCameraWithAudio() {
+    const previous = state.stream;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: state.facingMode },
+          width: { ideal: 1280 },
+          height: { ideal: CONFIG.VIDEO_IDEAL_HEIGHT }
+        },
+        audio: true
+      });
+      if (previous) previous.getTracks().forEach((track) => track.stop());
+      state.stream = stream;
+      state.streamHasAudio = stream.getAudioTracks().length > 0;
+      els.cameraVideo.srcObject = stream;
+      await waitForVideoReady(els.cameraVideo);
+      try { await els.cameraVideo.play(); } catch (error) { /* 自動再生の拒否は無視 */ }
+      return true;
+    } catch (error) {
+      console.warn('[rec] 音声つきで取得できません', error.name);
+      if (state.stream === previous && previous) {
+        // 元のストリームがそのまま生きているので、映像だけで録画します
+        state.streamHasAudio = false;
+        toast('マイクが使えないため、音声なしで録画します。', null, 5000);
+        return true;
+      }
+      await initCamera();
+      toast('カメラを取得できませんでした。', 'error');
+      return false;
+    }
   }
 
   /* ==========================================================================
@@ -2180,6 +2585,7 @@
       state.stream.getTracks().forEach((track) => track.stop());
       state.stream = null;
     }
+    state.streamHasAudio = false;
     els.cameraVideo.srcObject = null;
   }
 
@@ -2368,6 +2774,8 @@
       els['view-camera'].classList.add('active');
       document.body.style.overflow = 'hidden';
       syncFullscreenUI();
+      syncModeSwitch();
+      setCaptureKind(state.captureKind);
       // 許可が要らない端末（Android など）は黙って傾き判定を始めます
       if (!needsMotionPermission()) startOrientationSensor();
       syncRotateHint();
@@ -2375,6 +2783,9 @@
       initCamera();
       return;
     }
+
+    // 録画したまま画面を離れられると、動画が宙に浮きます
+    if (state.isRecording) stopRecording();
 
     stopCamera();
     Fullscreen.exit();
@@ -2533,6 +2944,15 @@
 
     item.appendChild(img);
     item.appendChild(checkbox);
+
+    if (imgData.isVideo) {
+      item.setAttribute('aria-label', (imgData.uploader || 'ゲスト') + ' さんの動画');
+      const badge = document.createElement('span');
+      badge.className = 'video-badge';
+      badge.textContent = '▶ 動画';
+      item.appendChild(badge);
+    }
+
     return item;
   }
 
@@ -2632,14 +3052,30 @@
    * プレビューモーダル
    * ======================================================================== */
   function openImageModal(imgData) {
-    els.modalImg.src = imgData.highResUrl;
-    els.modalImg.alt = (imgData.uploader || 'ゲスト') + ' さんの写真';
     els.modalUploaderName.textContent = imgData.uploader || 'ゲスト';
-
     const button = els.modalDownloadBtn;
-    button.textContent = '⬇️ 保存する';
-    button.disabled = false;
-    button.onclick = () => saveSinglePhoto(imgData, button);
+
+    if (imgData.isVideo) {
+      /* 動画は Drive のプレビューで再生します。
+         全体をダウンロードせずに済み、端末ごとのコーデック差も Google 側が吸収します。 */
+      els.modalImgWrap.hidden = true;
+      els.modalImg.src = '';
+      els.modalVideoWrap.hidden = false;
+      els.modalVideo.src = 'https://drive.google.com/file/d/'
+        + encodeURIComponent(imgData.id) + '/preview';
+      button.textContent = '⬇️ 動画を保存';
+      button.disabled = false;
+      button.onclick = () => saveSinglePhoto(imgData, button);
+    } else {
+      els.modalVideoWrap.hidden = true;
+      els.modalVideo.src = '';
+      els.modalImgWrap.hidden = false;
+      els.modalImg.src = imgData.highResUrl;
+      els.modalImg.alt = (imgData.uploader || 'ゲスト') + ' さんの写真';
+      button.textContent = '⬇️ 保存する';
+      button.disabled = false;
+      button.onclick = () => saveSinglePhoto(imgData, button);
+    }
 
     openOverlay(els.imageModal);
   }
@@ -2647,6 +3083,7 @@
   function closeImageModal() {
     closeOverlay(els.imageModal);
     els.modalImg.src = '';
+    els.modalVideo.src = ''; // 閉じても再生が続かないように
   }
 
   /**
@@ -2657,14 +3094,18 @@
    * そのため「取得」→「もう一度タップして保存」の 2 段構えにします。
    */
   async function saveSinglePhoto(imgData, button) {
-    const fileName = ensureJpgName(imgData.name);
+    // 動画は GAS が付けた拡張子をそのまま使います（.jpg を強制しない）
+    const type = imgData.isVideo ? (imgData.mimeType || 'video/mp4') : 'image/jpeg';
+    const fileName = imgData.isVideo ? (imgData.name || 'wedding_video.mp4')
+                                     : ensureJpgName(imgData.name);
     button.disabled = true;
     button.textContent = '⏳ 取得しています…';
 
     try {
-      const response = await callApiWithRetry('getSingleBase64', { fileId: imgData.id });
-      const blob = base64ToBlob(response.data, 'image/jpeg');
-      const file = new File([blob], fileName, { type: 'image/jpeg' });
+      const response = await callApiWithRetry('getSingleBase64', { fileId: imgData.id },
+        imgData.isVideo ? { timeout: CONFIG.VIDEO_UPLOAD_TIMEOUT_MS } : undefined);
+      const blob = base64ToBlob(response.data, type);
+      const file = new File([blob], fileName, { type: type });
 
       if (canShareFiles([file])) {
         button.textContent = '📲 タップして写真に保存';
@@ -2701,16 +3142,37 @@
    * ブロックするため、ゲストの多くが iPhone だと実質動きません。
    * 「Web Share（写真アプリに直接）」「ZIP 1 ファイル」「Drive で開く」を用意します。
    * ======================================================================== */
+  /**
+   * 一括保存の対象。
+   *
+   * 動画は 1 本で写真数十枚ぶんの容量になり、5 件ずつまとめて Base64 で取ると
+   * GAS の実行時間にも通信にも収まりません。まとめ保存からは外し、
+   * 動画はプレビューから 1 本ずつ保存してもらいます。
+   */
   function getDownloadTargets() {
-    if (state.isSelectMode && state.selectedIds.size > 0) {
-      return state.albumImages.filter((img) => state.selectedIds.has(img.id));
-    }
-    return state.albumImages.slice();
+    const base = (state.isSelectMode && state.selectedIds.size > 0)
+      ? state.albumImages.filter((img) => state.selectedIds.has(img.id))
+      : state.albumImages.slice();
+    return base.filter((img) => !img.isVideo);
+  }
+
+  function countExcludedVideos() {
+    const base = (state.isSelectMode && state.selectedIds.size > 0)
+      ? state.albumImages.filter((img) => state.selectedIds.has(img.id))
+      : state.albumImages;
+    return base.filter((img) => img.isVideo).length;
   }
 
   function openDownloadSheet() {
     const targets = getDownloadTargets();
-    if (targets.length === 0) return;
+    const excludedVideos = countExcludedVideos();
+
+    if (targets.length === 0) {
+      if (excludedVideos > 0) {
+        toast('動画はまとめて保存できません。動画をタップして 1 本ずつ保存してください。', null, 7000);
+      }
+      return;
+    }
 
     state.preparedFiles = null;
     els.sheetTitle.textContent = targets.length + ' 枚を保存';
@@ -2729,6 +3191,9 @@
         + '選択モードで ' + CONFIG.SHARE_MAX + ' 枚ずつ選ぶのがおすすめです。';
     } else if (targets.length > 30) {
       subtitle = '枚数が多いので Drive をおすすめします。';
+    }
+    if (excludedVideos > 0) {
+      subtitle += '（動画 ' + excludedVideos + ' 本は対象外です。1 本ずつ保存してください）';
     }
     els.sheetSubtitle.textContent = subtitle;
 
@@ -2937,6 +3402,8 @@
     'dismiss-rotate-hint': dismissRotateHint,
     'enable-tilt': enableTiltDetection,
     'pick-photos': openPhotoPicker,
+    'mode-photo': () => setCaptureKind('photo'),
+    'mode-video': () => setCaptureKind('video'),
     'retry-camera': () => initCamera(),
     'switch-camera': switchCamera,
     'shoot': onShutter,
@@ -2986,7 +3453,7 @@
       const backdrop = event.target.closest('[data-close-on-backdrop]');
       if (backdrop && event.target === backdrop) {
         closeOverlay(backdrop);
-        if (backdrop === els.imageModal) els.modalImg.src = '';
+        if (backdrop === els.imageModal) { els.modalImg.src = ''; els.modalVideo.src = ''; }
         if (backdrop === els.downloadSheet) state.preparedFiles = null;
       }
     });
