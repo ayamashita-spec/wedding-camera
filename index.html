@@ -164,6 +164,10 @@
     }
     .camera-container { width: 100%; height: 100%; position: relative; }
     #cameraVideo { width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
+    /* 自撮りは鏡像で見せます。カメラアプリと同じ見え方にするためです。
+       これは CSS の見た目だけの反転で、canvas への drawImage には影響しません。
+       保存される写真は反転しないので、背景の文字が左右逆になりません。 */
+    #cameraVideo.is-mirrored { transform: scaleX(-1); }
     .camera-placeholder {
       position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
       color: #fff; font-size: 14px; line-height: 1.7; width: 100%; padding: 0 24px;
@@ -533,8 +537,20 @@
     </div>
     <div style="font-size: 13px; line-height: 1.8; color: #ddd; max-width: 300px;">
       LINE などのアプリ内ブラウザでは、カメラが使えないことがあります。<br><br>
-      画面右上の <b>「…」</b> または <b>共有ボタン</b> から
-      <b>「Safari で開く」</b>（Android は <b>「ブラウザで開く」</b>）を選んでください。
+      <!-- ボタンの位置は OS で違います（iOS は下、Android は上）。
+           両方まとめて書くと、自分に関係ない方を探して迷わせます。 -->
+      <span id="inappHintIos" hidden>
+        画面<b>下</b>のバーにある <b>共有ボタン</b>（□に↑）を押して、
+        <b>「Safari で開く」</b> を選んでください。
+      </span>
+      <span id="inappHintAndroid" hidden>
+        画面<b>右上</b>の <b>「⋮」</b> を押して、
+        <b>「ブラウザで開く」</b>（または <b>「Chrome で開く」</b>）を選んでください。
+      </span>
+      <span id="inappHintGeneric" hidden>
+        ブラウザのメニューから <b>「Safari で開く」</b> /
+        <b>「ブラウザで開く」</b> を選んでください。
+      </span>
     </div>
     <button class="btn-text-link" data-action="dismiss-inapp">このまま続ける</button>
   </div>
@@ -858,7 +874,8 @@
 
   const els = {};
   const ELEMENT_IDS = [
-    'inappWarning', 'flashEffect', 'queueBadge', 'queueBadgeText', 'queueSpinner',
+    'inappWarning', 'inappHintIos', 'inappHintAndroid', 'inappHintGeneric',
+    'flashEffect', 'queueBadge', 'queueBadgeText', 'queueSpinner',
     'displayUserName', 'pendingBanner', 'pendingBannerText', 'btnSavePendingLocal',
     'view-cover', 'view-camera', 'view-album',
     'cameraVideo', 'cameraPlaceholder', 'cameraPlaceholderText', 'btnRetryCamera',
@@ -1669,6 +1686,15 @@
       state.stream = stream;
       els.cameraVideo.srcObject = stream;
 
+      /* 実際に前面カメラが選ばれたかはトラックに聞きます。
+         facingMode は ideal 指定なので、希望どおりとは限りません。 */
+      let usingFront = state.facingMode === 'user';
+      try {
+        const settings = stream.getVideoTracks()[0].getSettings();
+        if (settings && settings.facingMode) usingFront = settings.facingMode === 'user';
+      } catch (error) { /* 取れない端末は facingMode の希望値で判断します */ }
+      els.cameraVideo.classList.toggle('is-mirrored', usingFront);
+
       // メタデータを待たずにプレースホルダを隠すと一瞬黒画面が見えます
       await waitForVideoReady(els.cameraVideo);
       try { await els.cameraVideo.play(); } catch (error) { /* 自動再生の拒否は無視 */ }
@@ -2343,10 +2369,29 @@
   /* ==========================================================================
    * アプリ内ブラウザ判定
    * ======================================================================== */
+  /** iOS 判定。iPadOS は Mac を名乗るため、タッチの有無も見ます */
+  function isIos() {
+    const ua = navigator.userAgent || '';
+    if (/iPad|iPhone|iPod/.test(ua)) return true;
+    return /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+  }
+
   function checkInAppBrowser() {
     const ua = navigator.userAgent || navigator.vendor || '';
-    const patterns = [/Line\//i, /FBAN|FBAV|FB_IAB/i, /Instagram/i, /Twitter/i, /MicroMessenger/i];
-    if (patterns.some((pattern) => pattern.test(ua))) openOverlay(els.inappWarning);
+    const patterns = [
+      /Line\//i, /FBAN|FBAV|FB_IAB/i, /Instagram/i, /Twitter/i, /MicroMessenger/i,
+      /TikTok/i, /Threads/i,
+      /; wv\)/i // Android の汎用 WebView
+    ];
+    if (!patterns.some((pattern) => pattern.test(ua))) return;
+
+    // 共有ボタンの位置は OS で違います（iOS は画面下、Android は右上の ⋮）
+    const isAndroid = /Android/i.test(ua);
+    els.inappHintIos.hidden = !isIos();
+    els.inappHintAndroid.hidden = !isAndroid;
+    els.inappHintGeneric.hidden = isIos() || isAndroid;
+
+    openOverlay(els.inappWarning);
   }
 
   /* ==========================================================================
