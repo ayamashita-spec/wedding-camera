@@ -2879,8 +2879,21 @@
         pageSize: CONFIG.ALBUM_PAGE_SIZE
       });
 
-      state.albumImages = state.albumImages.concat(response.data || []);
-      state.nextPageToken = response.nextPageToken || null;
+      /* 重複の除外。サーバーが同じ写真を返しても画面が壊れないようにします
+         （実際、pageToken が長いとキャッシュキーの上限を超えて全件フォールバックに
+         落ち、2 ページ目に 1 ページ目が丸ごと混ざる不具合がありました）。 */
+      const known = new Set(state.albumImages.map((img) => img.id));
+      const incoming = (response.data || []).filter((img) => img && !known.has(img.id));
+      const duplicates = (response.data || []).length - incoming.length;
+      if (duplicates > 0) {
+        console.warn('[album] 重複 ' + duplicates + ' 件を除外しました');
+      }
+
+      state.albumImages = state.albumImages.concat(incoming);
+
+      /* 新しい写真が 1 枚も増えなかったら、これ以上ページをたどっても
+         同じものが返るだけなので打ち切ります（無限ループの防止）。 */
+      state.nextPageToken = (incoming.length === 0) ? null : (response.nextPageToken || null);
 
       if (state.albumImages.length === 0) {
         els.albumStatus.innerHTML =
