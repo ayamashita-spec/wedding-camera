@@ -1,0 +1,2494 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>Wedding Camera</title>
+
+  <!-- user-scalable=no を外しました。アクセシビリティ上の問題があり、
+       アルバムのピンチ拡大も封じてしまうためです。
+       カメラ画面のピンチは CSS の touch-action で個別に抑えています。 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="WedCam">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#faf8f5">
+  <link rel="manifest" href="./manifest.json">
+
+  <!-- iOS は manifest のアイコンを読まないため個別指定が必要です -->
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <link rel="icon" href="./icons/icon-192.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- 会場の回線を考え、実際に使うウェイトだけに絞っています -->
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,600&family=Noto+Sans+JP:wght@400;700&family=Zen+Maru+Gothic:wght@500&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --wedding-gold: #b39b7d;
+      --wedding-pink: #dfa8b4;
+      --wedding-pink-deep: #c98a99;
+      --insta-border: #dbdbdb;
+      --danger: #d9534f;
+      --ink: #333;
+      --paper: #faf8f5;
+    }
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%; min-height: 100%;
+      margin: 0; padding: 0;
+      font-family: 'Noto Sans JP', sans-serif;
+      text-align: center; color: var(--ink);
+      background-color: var(--paper);
+      -webkit-touch-callout: none;
+    }
+
+    /* 横スクロールは止めたいのですが、body に overflow-x: hidden を置いてはいけません。
+       片方の軸が visible 以外だともう片方が auto に計算されるため、body が
+       「実際にはスクロールしないスクロールコンテナ」になり、
+       中の position: sticky が全部死にます（アルバムの見出しが固定されませんでした）。
+
+       - html 側の hidden で横方向はきちんと切れます
+       - body 側は clip。clip はスクロールコンテナを作らないので sticky が生きます
+       - clip 非対応の旧 Safari では body は visible に戻り、html 側の hidden が効きます */
+    html { overflow-x: hidden; }
+    body { overflow-x: clip; }
+
+    button { font-family: inherit; }
+    button:focus-visible,
+    [role="button"]:focus-visible,
+    input:focus-visible {
+      outline: 3px solid var(--wedding-pink-deep);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
+
+    .glass-panel {
+      background: rgba(255, 255, 255, 0.75);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+      border-radius: 20px;
+    }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+    }
+
+    .view-screen { display: none; width: 100%; min-height: 100dvh; }
+    .view-screen.active { display: flex; animation: fadeIn 0.35s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+
+    /* ── 表紙 ───────────────────────────────────────────── */
+    #view-cover {
+      flex-direction: column; align-items: center; justify-content: center;
+      padding: 30px 20px;
+      /* 外部 CDN 依存を外し、まず単色で必ず描かれるようにしています。
+         背景写真を使う場合は ./assets/cover.jpg を置いてください。 */
+      background-color: #efe6e0;
+      background-image: url('./assets/cover.jpg');
+      background-size: cover; background-position: center;
+      position: relative;
+    }
+    .cover-bg-overlay {
+      position: absolute; inset: 0;
+      background: rgba(255, 255, 255, 0.65); z-index: 1;
+    }
+    .cover-content {
+      position: relative; z-index: 2; width: 100%; max-width: 380px;
+      padding: 40px 25px; display: flex; flex-direction: column; align-items: center;
+    }
+    .cover-title h1 {
+      margin: 10px 0 0; font-size: 34px; color: var(--wedding-gold);
+      font-family: 'Cormorant Garamond', serif; font-style: italic;
+      letter-spacing: 1.5px; line-height: 1.1;
+    }
+    .cover-title p { margin: 5px 0 25px; font-size: 12px; color: #5f5f5f; letter-spacing: 2px; }
+
+    .cover-user-box {
+      margin-bottom: 25px; font-size: 13px;
+      padding: 10px 20px; border-radius: 30px; background: rgba(255,255,255,0.85);
+      border: 1px solid rgba(223, 168, 180, 0.4);
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .edit-name-btn {
+      color: var(--wedding-pink-deep); cursor: pointer; font-size: 11px;
+      text-decoration: underline; background: none; border: none; padding: 4px;
+    }
+
+    .cover-buttons { width: 100%; display: flex; flex-direction: column; gap: 14px; }
+    .btn-mode-select {
+      width: 100%; padding: 16px 20px; border-radius: 35px; border: none;
+      font-size: 15px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      transition: transform 0.2s ease; box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-mode-camera {
+      background: linear-gradient(135deg, #e8b4be 0%, var(--wedding-pink) 100%);
+      color: #fff; box-shadow: 0 8px 25px rgba(223, 168, 180, 0.4);
+    }
+    .btn-mode-camera:active { transform: scale(0.96); }
+    .btn-mode-album { background: #fff; color: #444; border: 1.5px solid var(--wedding-gold); }
+    .btn-mode-album:active { transform: scale(0.96); background: #fafafa; }
+
+    .btn-pwa-guide {
+      background: transparent; border: none; color: #6b6b6b; font-size: 11px;
+      margin-top: 15px; cursor: pointer; text-decoration: underline;
+    }
+
+    /* 未送信の写真がある場合の通知 */
+    .pending-banner {
+      display: none; width: 100%; max-width: 380px; margin-top: 16px;
+      background: #fff4e5; border: 1px solid #f0c98d; border-radius: 14px;
+      padding: 14px 16px; font-size: 12px; line-height: 1.6; color: #7a5a1e;
+      position: relative; z-index: 2; text-align: left;
+    }
+    .pending-banner button {
+      margin-top: 10px; width: 100%; padding: 10px; border-radius: 20px;
+      border: none; background: var(--wedding-pink); color: #fff;
+      font-weight: 700; font-size: 12px; cursor: pointer;
+    }
+    /* 恒久的に送れない写真を端末側へ救い出す導線。
+       これが無いと、キュー内の写真は取り出す手段がありません。 */
+    .pending-banner button.is-secondary {
+      background: #fff; color: #7a5a1e; border: 1px solid #dcb877;
+    }
+    .pending-banner button:disabled { opacity: 0.55; }
+
+    /* ── カメラ ─────────────────────────────────────────── */
+    #view-camera {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
+      overflow: hidden; background: #000;
+      touch-action: none; /* カメラ画面だけピンチ・スクロールを抑制 */
+    }
+    .camera-container { width: 100%; height: 100%; position: relative; }
+    #cameraVideo { width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
+    .camera-placeholder {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      color: #fff; font-size: 14px; line-height: 1.7; width: 100%; padding: 0 24px;
+      white-space: pre-line;
+    }
+    .camera-placeholder button {
+      margin-top: 18px; padding: 12px 24px; border-radius: 24px; border: none;
+      background: var(--wedding-pink); color: #fff; font-weight: 700; font-size: 13px; cursor: pointer;
+    }
+
+    .camera-chip {
+      position: absolute; top: calc(12px + env(safe-area-inset-top));
+      z-index: 25; padding: 8px 14px; border-radius: 20px;
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.3); color: #fff;
+      font-size: 11px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; gap: 5px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .camera-chip svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
+    #btnCameraBack { left: 12px; }
+    #btnFullscreenToggle { right: 12px; }
+    #btnFullscreenToggle[hidden] { display: none; }
+
+    .camera-controls-overlay {
+      position: absolute; bottom: 0; left: 0; right: 0; z-index: 20;
+      padding: 15px 20px calc(15px + env(safe-area-inset-bottom)) 20px;
+      display: flex; flex-direction: column; align-items: center;
+      background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%);
+    }
+    .camera-controls {
+      display: flex; justify-content: center; align-items: center; gap: 30px;
+      width: 100%; max-width: 320px;
+    }
+    .shutter-btn-visual {
+      width: 80px; height: 80px; border-radius: 50%; background: #fff;
+      border: 4px solid var(--wedding-pink); display: flex; flex-direction: column;
+      align-items: center; justify-content: center; padding: 0;
+      box-shadow: 0 0 25px rgba(223, 168, 180, 0.6);
+      color: var(--wedding-pink-deep); cursor: pointer; transition: transform 0.1s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .shutter-btn-visual:active { transform: scale(0.90); }
+    .shutter-btn-visual:disabled { opacity: 0.55; }
+    .shutter-icon { font-size: 30px; line-height: 1; }
+    .shutter-label {
+      font-size: 9px; font-weight: 700; letter-spacing: 1px;
+      font-family: 'Zen Maru Gothic', sans-serif;
+    }
+
+    .switch-cam-btn {
+      background: rgba(255, 255, 255, 0.25);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.4); color: #fff; border-radius: 50%;
+      width: 44px; height: 44px; font-size: 18px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .switch-cam-btn[hidden] { display: none; }
+
+    #status {
+      font-family: 'Zen Maru Gothic', sans-serif; font-size: 12px; margin-top: 10px;
+      color: #fff; min-height: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+    }
+    #status.is-error { color: #ffb3b3; }
+
+    @media (orientation: landscape) {
+      .camera-controls-overlay {
+        top: 0; bottom: 0; left: auto; right: 0; width: 95px;
+        padding: calc(10px + env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom)) 10px;
+        background: linear-gradient(to left, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
+        justify-content: center;
+      }
+      .camera-controls { flex-direction: column; gap: 16px; width: auto; }
+      .shutter-btn-visual { width: 64px; height: 64px; border-width: 3px; }
+      .shutter-icon { font-size: 24px; }
+      .shutter-label { font-size: 8px; }
+      .switch-cam-btn { width: 38px; height: 38px; font-size: 16px; }
+      .camera-chip { top: calc(8px + env(safe-area-inset-top)); padding: 6px 12px; font-size: 10px; }
+      #status {
+        position: absolute; bottom: 8px; left: 15px; margin: 0;
+        font-size: 11px; text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+      }
+    }
+
+    #flashEffect {
+      position: fixed; inset: 0; background: #fff;
+      z-index: 9990; opacity: 0; pointer-events: none; transition: opacity 0.4s ease-out;
+    }
+    #flashEffect.flash-active { opacity: 1; transition: opacity 0.05s ease-out; }
+
+    /* ── 同期バッジ（画面をまたいで常時表示） ─────────────── */
+    .queue-status-badge {
+      position: fixed; top: calc(10px + env(safe-area-inset-top));
+      left: 50%; transform: translateX(-50%);
+      z-index: 90; padding: 6px 14px; border-radius: 20px;
+      background: rgba(223, 168, 180, 0.95);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      color: #fff; font-size: 10px; font-weight: 700; display: none;
+      align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+      white-space: nowrap;
+    }
+    .queue-status-badge.is-warning { background: rgba(217, 83, 79, 0.95); }
+    .queue-spinner {
+      width: 10px; height: 10px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── アルバム ───────────────────────────────────────── */
+    #view-album {
+      flex-direction: column; width: 100%; background: #fff; padding-bottom: 100px;
+    }
+    /* ヘッダーと選択ツールバーは 1 つの sticky にまとめます。
+       それぞれ個別に sticky top:0 にすると同じ位置に重なり、
+       z-index の低いツールバーがヘッダーの下に潜って見えなくなります。 */
+    .album-sticky-head { position: sticky; top: 0; left: 0; width: 100%; z-index: 50; }
+    .album-header-bar {
+      width: 100%;
+      /* safe-area は padding-top に入れます。旧版は bottom に入っていたため
+         ノッチ機で見出しがステータスバーに食い込んでいました。 */
+      padding: calc(10px + env(safe-area-inset-top)) 14px 10px 14px;
+      display: flex; justify-content: space-between; align-items: center;
+      background: rgba(255,255,255,0.94);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--insta-border);
+    }
+    .btn-album-back {
+      background: #f0f0f0; border: none; color: #333; font-size: 12px;
+      font-weight: 700; cursor: pointer; padding: 8px 14px; border-radius: 15px;
+    }
+    .album-header-right { display: flex; align-items: center; gap: 8px; }
+    .btn-icon-round {
+      background: #f0f0f0; border: none; width: 32px; height: 32px; border-radius: 50%;
+      font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    }
+    .btn-icon-round:disabled { opacity: 0.4; }
+    .btn-select-toggle {
+      background: #fff; border: 1.5px solid var(--wedding-pink); color: var(--wedding-pink-deep);
+      padding: 7px 12px; border-radius: 15px; font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+    .btn-select-toggle.active { background: var(--wedding-pink); color: #fff; }
+
+    .selection-toolbar {
+      display: none; justify-content: space-between; align-items: center;
+      padding: 10px 16px; background: var(--paper); border-bottom: 1px solid var(--insta-border);
+      font-size: 12px; color: #555; font-weight: 700;
+    }
+    .selection-toolbar-btns { display: flex; gap: 14px; }
+    .btn-sub-action {
+      background: none; border: none; color: var(--wedding-gold);
+      font-weight: 700; cursor: pointer; font-size: 12px; padding: 4px;
+    }
+
+    .album-container { max-width: 600px; width: 100%; margin: 0 auto; }
+    .insta-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+      width: 100%; background: var(--insta-border);
+    }
+
+    .grid-item {
+      background: #f4f4f4; cursor: pointer; position: relative;
+      width: 100%; aspect-ratio: 1 / 1; overflow: hidden; border: none; padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .grid-item img {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+      transition: opacity 0.2s, transform 0.2s;
+    }
+    .grid-item:active img { opacity: 0.8; }
+    .grid-item.is-broken::after {
+      content: '読み込めません'; position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px; color: #999; background: #f4f4f4;
+    }
+
+    .select-checkbox {
+      display: none; position: absolute; top: 8px; right: 8px; width: 22px; height: 22px;
+      border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,0.3);
+      box-shadow: 0 2px 5px rgba(0,0,0,0.3); z-index: 10;
+      align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: bold;
+    }
+    .select-mode-active .select-checkbox { display: flex; }
+    .select-mode-active .grid-item.selected .select-checkbox { background: var(--wedding-pink); }
+    .select-mode-active .grid-item.selected img { transform: scale(0.94); border-radius: 8px; opacity: 0.85; }
+
+    .album-more { padding: 24px 20px 8px; }
+    .btn-load-more {
+      background: #fff; border: 1.5px solid var(--wedding-gold); color: #6b5a44;
+      padding: 12px 28px; border-radius: 24px; font-size: 13px; font-weight: 700; cursor: pointer;
+    }
+    .btn-load-more:disabled { opacity: 0.5; }
+
+    .bottom-download-bar {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 60;
+      padding: 12px 20px calc(12px + env(safe-area-inset-bottom)) 20px;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border-top: 1px solid var(--insta-border); box-shadow: 0 -4px 20px rgba(0,0,0,0.08);
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    }
+    .download-bar-info { font-size: 13px; font-weight: 700; color: #333; }
+    .btn-exec-download {
+      background: linear-gradient(135deg, #e8b4be 0%, var(--wedding-pink) 100%);
+      color: #fff; border: none; padding: 12px 20px; border-radius: 25px;
+      font-weight: 700; font-size: 13px; cursor: pointer;
+      box-shadow: 0 4px 15px rgba(223, 168, 180, 0.4);
+      transition: transform 0.1s; white-space: nowrap;
+    }
+    .btn-exec-download:active { transform: scale(0.95); }
+    .btn-exec-download:disabled { opacity: 0.5; box-shadow: none; }
+
+    .album-status { font-size: 13px; color: #8a8a8a; margin: 48px 24px; line-height: 1.8; }
+    .album-status strong { display: block; font-size: 15px; color: var(--wedding-pink-deep); margin-bottom: 8px; }
+    .album-status button {
+      margin-top: 16px; padding: 10px 22px; border-radius: 22px; border: none;
+      background: var(--wedding-pink); color: #fff; font-weight: 700; font-size: 12px; cursor: pointer;
+    }
+
+    /* ── モーダル共通 ───────────────────────────────────── */
+    .modal {
+      display: none; position: fixed; inset: 0; z-index: 9500;
+      background-color: rgba(0,0,0,0.85);
+      backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+    }
+    .modal.is-open { display: block; }
+    .modal-content-wrapper {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 90%; max-width: 450px; max-height: 90dvh; overflow-y: auto;
+      background: #fff; border-radius: 16px;
+    }
+    .modal-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 16px; border-bottom: 1px solid var(--insta-border);
+    }
+    .modal-user-info { display: flex; align-items: center; font-weight: 700; font-size: 13px; color: #262626; }
+    .modal-avatar {
+      width: 28px; height: 28px; border-radius: 50%; margin-right: 10px;
+      background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);
+    }
+    .modal-img-container {
+      width: 100%; min-height: 200px; background: #faf9f7;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .modal-img-container img { width: 100%; max-height: 60vh; object-fit: contain; display: block; }
+    .modal-actions { padding: 12px 16px; display: flex; justify-content: flex-end; align-items: center; }
+    .download-btn {
+      background: var(--wedding-pink); color: #fff; border: none; padding: 10px 18px;
+      border-radius: 8px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; gap: 8px; font-size: 13px;
+    }
+    .download-btn:active { opacity: 0.8; }
+    .download-btn:disabled { opacity: 0.5; }
+    .close-btn-top {
+      position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 16px;
+      color: #fff; font-size: 32px; cursor: pointer; z-index: 20;
+      background: none; border: none; line-height: 1; padding: 8px;
+    }
+
+    .name-input-field {
+      width: 100%; padding: 14px; border: 2px solid #eee; border-radius: 8px;
+      font-size: 16px; /* iOS の自動ズームを防ぐため 16px 以上 */
+      font-family: inherit; outline: none; margin-bottom: 8px;
+      text-align: center; color: #333; background: #fafafa;
+    }
+    .name-input-field:focus { border-color: var(--wedding-pink); background: #fff; }
+    .name-input-hint { font-size: 11px; color: #999; margin-bottom: 16px; min-height: 16px; }
+    .name-input-hint.is-error { color: var(--danger); }
+    .name-submit-btn {
+      background: var(--wedding-pink); color: #fff; border: none; padding: 14px 20px;
+      border-radius: 30px; font-weight: 700; cursor: pointer; width: 100%; font-size: 14px;
+      box-shadow: 0 4px 15px rgba(223, 168, 180, 0.4);
+    }
+    .name-submit-btn:active { transform: scale(0.95); }
+    .btn-text-link {
+      background: transparent; color: #999; border: none; margin-top: 15px;
+      font-size: 12px; cursor: pointer; text-decoration: underline;
+    }
+    .message-box {
+      background: rgba(255,255,255,0.6); padding: 15px; border-radius: 12px;
+      font-size: 13px; color: #555; margin-bottom: 18px; line-height: 1.7;
+      border: 1px solid rgba(255,255,255,0.9);
+    }
+    .privacy-note { font-size: 10.5px; color: #8a8a8a; line-height: 1.6; margin-bottom: 18px; }
+
+    /* ── 進捗オーバーレイ ───────────────────────────────── */
+    .progress-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(255, 255, 255, 0.94);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      z-index: 9700; flex-direction: column; align-items: center; justify-content: center;
+      color: #333; padding: 30px;
+    }
+    .progress-overlay.is-open { display: flex; }
+    .progress-text { font-size: 16px; margin-bottom: 12px; font-weight: 700; color: var(--wedding-pink-deep); }
+    .progress-bar-track { width: 100%; max-width: 260px; height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
+    .progress-bar-fill { height: 100%; width: 0%; background: var(--wedding-pink); transition: width 0.3s ease; }
+    .progress-subtext { font-size: 11px; color: #888; margin-top: 12px; line-height: 1.7; }
+    .progress-overlay button {
+      margin-top: 22px; background: none; border: 1px solid #ccc; color: #777;
+      padding: 8px 20px; border-radius: 20px; font-size: 12px; cursor: pointer;
+    }
+
+    /* ── アプリ内ブラウザ警告 ───────────────────────────── */
+    .inapp-warning {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.9); z-index: 9900; color: #fff; padding: 30px 20px;
+      flex-direction: column; align-items: center; justify-content: center;
+    }
+    .inapp-warning.is-open { display: flex; }
+    .inapp-warning .btn-text-link { color: #aaa; }
+
+    /* ── ボトムシート ───────────────────────────────────── */
+    .sheet-backdrop {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+      z-index: 9600; align-items: flex-end; justify-content: center;
+    }
+    .sheet-backdrop.is-open { display: flex; }
+    .sheet {
+      width: 100%; max-width: 480px; background: #fff;
+      border-radius: 20px 20px 0 0; padding: 22px 20px calc(22px + env(safe-area-inset-bottom));
+      animation: slideUp 0.25s ease-out;
+    }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    .sheet h2 { font-size: 15px; margin: 0 0 4px; color: #333; }
+    .sheet p { font-size: 12px; color: #888; margin: 0 0 18px; line-height: 1.6; }
+    .sheet-option {
+      width: 100%; display: flex; align-items: flex-start; gap: 12px; text-align: left;
+      padding: 14px 16px; margin-bottom: 10px; border-radius: 14px;
+      border: 1.5px solid #eee; background: #fff; cursor: pointer; font-size: 13px;
+    }
+    /* display を指定したクラスはブラウザ標準の [hidden] { display: none } に勝ってしまいます。
+       これが無いと el.hidden = true が効かず、使えない保存方法まで並び続けます。 */
+    .sheet-option[hidden] { display: none; }
+    .sheet-option:disabled { opacity: 0.4; }
+    .sheet-option.is-primary { border-color: var(--wedding-pink); background: #fff8fa; }
+    .sheet-option .sheet-option-icon { font-size: 20px; line-height: 1.2; }
+    .sheet-option .sheet-option-title { font-weight: 700; display: block; margin-bottom: 3px; }
+    .sheet-option .sheet-option-desc { font-size: 11px; color: #8a8a8a; line-height: 1.5; font-weight: 400; }
+
+    /* ── トースト（全画面表示中でも消えない通知） ───────── */
+    .toast-stack {
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: calc(24px + env(safe-area-inset-bottom));
+      z-index: 9800; display: flex; flex-direction: column; gap: 8px;
+      width: calc(100% - 40px); max-width: 380px; pointer-events: none;
+    }
+    .toast {
+      background: rgba(30, 30, 30, 0.94); color: #fff; border-radius: 12px;
+      padding: 12px 16px; font-size: 12.5px; line-height: 1.6;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.3); animation: toastIn 0.2s ease-out;
+    }
+    .toast.is-error { background: rgba(178, 48, 44, 0.96); }
+    .toast.is-success { background: rgba(58, 130, 96, 0.96); }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+
+  <!-- アプリ内ブラウザ警告 -->
+  <div id="inappWarning" class="inapp-warning">
+    <div style="font-size: 40px; margin-bottom: 15px;">🌐</div>
+    <div style="font-size: 18px; font-weight: bold; margin-bottom: 12px; color: var(--wedding-pink);">
+      Safari か Chrome で開いてください
+    </div>
+    <div style="font-size: 13px; line-height: 1.8; color: #ddd; max-width: 300px;">
+      LINE などのアプリ内ブラウザでは、カメラが使えないことがあります。<br><br>
+      画面右上の <b>「…」</b> または <b>共有ボタン</b> から
+      <b>「Safari で開く」</b>（Android は <b>「ブラウザで開く」</b>）を選んでください。
+    </div>
+    <button class="btn-text-link" data-action="dismiss-inapp">このまま続ける</button>
+  </div>
+
+  <div id="flashEffect" aria-hidden="true"></div>
+
+  <!-- 同期バッジ：カメラ / アルバムどちらにいても見えるよう body 直下に置いています -->
+  <div class="queue-status-badge" id="queueBadge" role="status" aria-live="polite">
+    <span class="queue-spinner" id="queueSpinner" aria-hidden="true"></span>
+    <span id="queueBadgeText"></span>
+  </div>
+
+  <!-- ══ 表紙 ══════════════════════════════════════════ -->
+  <div id="view-cover" class="view-screen active">
+    <div class="cover-bg-overlay"></div>
+    <div class="cover-content glass-panel">
+      <svg width="100" height="35" viewBox="0 0 100 35" aria-hidden="true" style="margin-bottom: 5px;">
+        <path d="M 35 25 C 20 25, 15 15, 10 10 C 20 15, 30 15, 35 25" fill="var(--wedding-gold)" opacity="0.5"/>
+        <path d="M 65 25 C 80 25, 85 15, 90 10 C 80 15, 70 15, 65 25" fill="var(--wedding-gold)" opacity="0.5"/>
+        <circle cx="45" cy="15" r="9" fill="none" stroke="var(--wedding-gold)" stroke-width="2"/>
+        <circle cx="55" cy="15" r="9" fill="none" stroke="var(--wedding-pink)" stroke-width="2"/>
+        <path d="M 45 4 L 45 9 M 42 6 L 48 6" stroke="var(--wedding-gold)" stroke-width="1.5"/>
+      </svg>
+      <div class="cover-title">
+        <h1>Wedding Camera</h1>
+        <p>デジタル使い捨てカメラ</p>
+      </div>
+
+      <div class="cover-user-box">
+        <span aria-hidden="true">👤</span> 投稿者:
+        <span id="displayUserName" style="font-family: 'Zen Maru Gothic', sans-serif;">未設定</span>
+        <button class="edit-name-btn" data-action="edit-name">変更</button>
+      </div>
+
+      <div class="cover-buttons">
+        <button class="btn-mode-select btn-mode-camera" data-action="open-camera">
+          <span aria-hidden="true">📷</span> カメラを起動する
+        </button>
+        <button class="btn-mode-select btn-mode-album" data-action="open-album">
+          <span aria-hidden="true">🖼️</span> 共有アルバムを見る
+        </button>
+      </div>
+
+      <button class="btn-pwa-guide" data-action="show-pwa-guide">
+        💡 アドレスバーを消してアプリのように開く
+      </button>
+    </div>
+
+    <!-- 未送信写真の通知 -->
+    <div class="pending-banner" id="pendingBanner">
+      <div id="pendingBannerText"></div>
+      <button data-action="retry-uploads">今すぐ送信する</button>
+      <button data-action="save-pending-local" id="btnSavePendingLocal" class="is-secondary">
+        端末に保存する
+      </button>
+    </div>
+  </div>
+
+  <!-- ══ カメラ ════════════════════════════════════════ -->
+  <div id="view-camera" class="view-screen">
+    <button class="camera-chip" id="btnCameraBack" data-action="back-to-cover">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      モード選択
+    </button>
+
+    <button class="camera-chip" id="btnFullscreenToggle" data-action="toggle-fullscreen" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true" id="iconFullscreen">
+        <path d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5"/>
+      </svg>
+      <span id="fullscreenLabel">全画面</span>
+    </button>
+
+    <div class="camera-container">
+      <video id="cameraVideo" autoplay playsinline muted></video>
+      <div id="cameraPlaceholder" class="camera-placeholder">
+        <span id="cameraPlaceholderText">📷 カメラを起動しています…</span>
+        <div><button data-action="retry-camera" id="btnRetryCamera" hidden>もう一度試す</button></div>
+      </div>
+    </div>
+
+    <div class="camera-controls-overlay">
+      <div class="camera-controls">
+        <button class="switch-cam-btn" id="switchCamBtn" data-action="switch-camera" hidden
+                aria-label="前面・背面カメラを切り替える">🔄</button>
+        <button class="shutter-btn-visual" id="shutterBtn" data-action="shoot" aria-label="撮影する">
+          <span class="shutter-icon" aria-hidden="true">📷</span>
+          <span class="shutter-label">SHOOT</span>
+        </button>
+        <div id="controlSpacer" style="width: 44px;" hidden></div>
+      </div>
+      <div id="status" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <!-- ══ アルバム ══════════════════════════════════════ -->
+  <div id="view-album" class="view-screen">
+    <div class="album-sticky-head">
+      <div class="album-header-bar">
+        <button class="btn-album-back" data-action="back-to-cover">◀ モード選択</button>
+        <div class="album-header-right">
+          <button class="btn-icon-round" id="btnRefreshAlbum" data-action="refresh-album"
+                  aria-label="アルバムを再読み込みする">↻</button>
+          <button class="btn-select-toggle" id="btnSelectToggle" data-action="toggle-select-mode">
+            ☑ 選択モード
+          </button>
+        </div>
+      </div>
+
+      <div class="selection-toolbar" id="selectionToolbar">
+        <span id="selectedCountText">0 枚選択中</span>
+        <div class="selection-toolbar-btns">
+          <button class="btn-sub-action" data-action="select-all">表示中をすべて選択</button>
+          <button class="btn-sub-action" data-action="deselect-all">選択を解除</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="album-container">
+      <div id="albumStatus" class="album-status"></div>
+      <div class="insta-grid" id="photoGrid"></div>
+      <div class="album-more" id="albumMore" hidden>
+        <button class="btn-load-more" id="btnLoadMore" data-action="load-more">もっと見る</button>
+      </div>
+    </div>
+
+    <div class="bottom-download-bar" id="bottomDownloadBar">
+      <div class="download-bar-info" id="downloadBarInfo">全 0 枚</div>
+      <button class="btn-exec-download" id="btnExecDownload" data-action="open-download-sheet">
+        ⬇️ 写真を保存
+      </button>
+    </div>
+  </div>
+
+  <!-- ══ プレビューモーダル ════════════════════════════ -->
+  <div id="imageModal" class="modal" data-close-on-backdrop>
+    <button class="close-btn-top" data-action="close-image-modal" aria-label="閉じる">×</button>
+    <div class="modal-content-wrapper">
+      <div class="modal-header">
+        <div class="modal-user-info">
+          <div class="modal-avatar" aria-hidden="true"></div>
+          <span id="modalUploaderName">ゲスト</span>
+        </div>
+      </div>
+      <div class="modal-img-container"><img id="modalImg" alt=""></div>
+      <div class="modal-actions">
+        <button id="modalDownloadBtn" class="download-btn">⬇️ 保存する</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 名前登録モーダル ══════════════════════════════ -->
+  <div id="nameModal" class="modal">
+    <div class="modal-content-wrapper glass-panel" style="padding: 34px 24px; background: #fff;">
+      <div style="font-size: 36px; line-height: 1;" aria-hidden="true">💌</div>
+      <h2 style="font-family: 'Cormorant Garamond', serif; font-size: 24px; color: var(--wedding-gold); margin: 6px 0 18px;">
+        Welcome!
+      </h2>
+
+      <div class="message-box">
+        撮った写真は、ゲスト全員が見られる<b>共有アルバム</b>に入ります📸<br><br>
+        誰が撮ってくれた写真か分かるように、お名前を教えてください✨
+      </div>
+
+      <label for="nameInput" class="sr-only">お名前</label>
+      <input type="text" id="nameInput" class="name-input-field" maxlength="20"
+             placeholder="例：新郎の友人 たろう" autocomplete="off" enterkeyhint="done">
+      <div class="name-input-hint" id="nameInputHint">20 文字まで</div>
+
+      <p class="privacy-note">
+        お名前と写真は、このアプリの URL を知っている人全員に表示されます。
+        本名を出したくない場合はニックネームでも大丈夫です。
+      </p>
+
+      <button data-action="save-name" class="name-submit-btn">設定して次へ</button>
+      <button data-action="close-name-modal" id="nameModalCancelBtn" class="btn-text-link">キャンセル</button>
+    </div>
+  </div>
+
+  <!-- ══ PWA ガイド ════════════════════════════════════ -->
+  <div id="pwaModal" class="modal" data-close-on-backdrop>
+    <div class="modal-content-wrapper glass-panel" style="padding: 30px 22px; background: #fff;">
+      <div style="font-size: 32px; margin-bottom: 8px;" aria-hidden="true">📲</div>
+      <h2 style="font-size: 16px; color: var(--wedding-pink-deep); margin: 0 0 16px;">
+        アプリのように全画面で開く
+      </h2>
+      <div style="font-size: 12px; line-height: 1.9; color: #555; text-align: left;
+                  margin-bottom: 20px; background: rgba(0,0,0,0.03); padding: 16px; border-radius: 12px;">
+        <b>iPhone / Safari</b><br>
+        1. 画面下の共有ボタン（□ に ↑ のアイコン）をタップ<br>
+        2. 「<b>ホーム画面に追加</b>」を選ぶ<br><br>
+        <b>Android / Chrome</b><br>
+        1. 右上のメニュー（︙）をタップ<br>
+        2. 「<b>ホーム画面に追加</b>」または「<b>アプリをインストール</b>」を選ぶ
+      </div>
+      <button data-action="close-pwa-modal" class="name-submit-btn">閉じる</button>
+    </div>
+  </div>
+
+  <!-- ══ 保存方法シート ════════════════════════════════ -->
+  <div class="sheet-backdrop" id="downloadSheet" data-close-on-backdrop>
+    <div class="sheet">
+      <h2 id="sheetTitle">写真を保存</h2>
+      <p id="sheetSubtitle"></p>
+
+      <button class="sheet-option is-primary" id="optShare" data-action="save-via-share" hidden>
+        <span class="sheet-option-icon" aria-hidden="true">📲</span>
+        <span>
+          <span class="sheet-option-title" id="optShareTitle">写真アプリに保存</span>
+          <span class="sheet-option-desc">iPhone のカメラロールに直接入ります。おすすめ。</span>
+        </span>
+      </button>
+
+      <button class="sheet-option" id="optZip" data-action="save-via-zip">
+        <span class="sheet-option-icon" aria-hidden="true">🗂</span>
+        <span>
+          <span class="sheet-option-title">ZIP でまとめて保存</span>
+          <span class="sheet-option-desc">1 ファイルにまとめます。写真アプリではなく「ファイル」アプリに入ります。</span>
+        </span>
+      </button>
+
+      <button class="sheet-option" id="optDrive" data-action="save-via-drive" hidden>
+        <span class="sheet-option-icon" aria-hidden="true">📁</span>
+        <span>
+          <span class="sheet-option-title">Google Drive で開く</span>
+          <span class="sheet-option-desc">枚数が多いときはこちらが確実です。Drive アプリから一括保存できます。</span>
+        </span>
+      </button>
+
+      <button class="btn-text-link" data-action="close-download-sheet" style="width: 100%;">キャンセル</button>
+    </div>
+  </div>
+
+  <!-- ══ 進捗 ══════════════════════════════════════════ -->
+  <div id="progressOverlay" class="progress-overlay">
+    <div class="progress-text" id="progressText">準備しています…</div>
+    <div class="progress-bar-track"><div class="progress-bar-fill" id="progressBar"></div></div>
+    <div class="progress-subtext" id="progressSubtext">この画面を開いたままお待ちください</div>
+    <button data-action="cancel-progress" id="btnCancelProgress">中止する</button>
+  </div>
+
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+  <!-- 配信先ごとに変わる値（GAS の URL・トークン・Drive フォルダ）だけを分離しています。
+       このファイルは .gitignore 済みで、GitHub Actions が Secrets から生成します。
+       リポジトリにも git 履歴にもトークンが残らないようにするためです。 -->
+  <script src="./config.js"></script>
+
+  <script>
+  'use strict';
+
+  /* ==========================================================================
+   * 設定
+   * ======================================================================== */
+
+  /* config.js が無い / 読み込めない場合でもアプリは起動し、
+     init() の検査が「API の URL が設定されていません」を出します。 */
+  const DEPLOY = window.WEDCAM_CONFIG || {};
+
+  const CONFIG = {
+    /** GAS の /exec URL。デプロイを「新バージョン」で更新すれば変わりません */
+    API_URL: DEPLOY.API_URL || '',
+
+    /** GAS 側の generateApiToken() で生成した値。未設定なら空文字のまま */
+    API_TOKEN: DEPLOY.API_TOKEN || '',
+
+    /** 一括保存の代替として案内する Drive フォルダ。空なら非表示。
+        フォルダ ID だけを書いても動くよう、下の resolveDriveUrl() で URL に直します */
+    DRIVE_FOLDER_URL: DEPLOY.DRIVE_FOLDER_URL || '',
+
+    /* --- 画質 -------------------------------------------------------------
+       旧設定は長辺 960px / 品質 0.50 でした。スマホで見る分には足りますが、
+       PC で開くと粗く、プリントやトリミングには耐えません。
+       1600px / 0.80 なら 1 枚 300〜500KB 程度で、会場の回線でも十分送れます。 */
+    MAX_DIM: 1600,
+    JPEG_QUALITY: 0.80,
+
+    /* --- 撮影範囲 ---------------------------------------------------------
+       'native'  : カメラのフレーム全体を保存（歪みなし・情報量が最大）
+       'preview' : 画面に見えている範囲だけを切り出す（見た目どおり）
+       縦持ちで 'preview' にすると 9:19.5 のような細長い写真になるため
+       既定は 'native' にしています。 */
+    CAPTURE_MODE: 'native',
+
+    /** 連写の下限間隔。同じフレームが何枚も積まれるのを防ぎます */
+    SHUTTER_COOLDOWN_MS: 700,
+
+    /** 送信リトライの上限。無限リトライを防ぎます */
+    MAX_RETRY: 5,
+
+    /** 通信タイムアウト */
+    TIMEOUT_MS: 25000,
+    UPLOAD_TIMEOUT_MS: 45000,
+
+    /* 一括取得は 1 リクエストで 5 枚分の Base64（3MB 前後）が返ります。
+       会場の回線では 25 秒では足りないため個別に長めに取ります。 */
+    BATCH_TIMEOUT_MS: 60000,
+
+    /** 読み取り系の自動リトライ回数（1 回失敗＝即エラーにしないため） */
+    READ_ATTEMPTS: 3,
+
+    /** アルバム 1 ページの枚数。初期表示を軽くします */
+    ALBUM_PAGE_SIZE: 30,
+
+    /** GAS 側 BATCH_MAX と揃えること */
+    DOWNLOAD_CHUNK: 5,
+
+    /** Web Share でまとめて渡す上限。これを超えると OS 側で失敗しがちです */
+    SHARE_MAX: 20,
+
+    JSZIP_URL: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+    STORAGE_KEY_NAME: 'wedding_guest_name'
+  };
+
+  /* ==========================================================================
+   * 状態
+   * ======================================================================== */
+  const state = {
+    albumImages: [],
+    selectedIds: new Set(),
+    nextPageToken: null,
+    isSelectMode: false,
+    isAlbumLoading: false,
+
+    stream: null,
+    facingMode: 'environment',
+    hasMultipleCameras: false,
+    isCapturing: false,
+    isCameraStarting: false,
+
+    pendingCount: 0,
+    failedCount: 0,
+    isQueueRunning: false,
+
+    pendingNavigation: null,
+    currentView: 'cover',
+    cancelRequested: false,
+    preparedFiles: null,
+
+    /** 未送信写真を端末に保存するとき、share() 直前まで持っておくファイル */
+    pendingLocalFiles: null
+  };
+
+  const els = {};
+  const ELEMENT_IDS = [
+    'inappWarning', 'flashEffect', 'queueBadge', 'queueBadgeText', 'queueSpinner',
+    'displayUserName', 'pendingBanner', 'pendingBannerText', 'btnSavePendingLocal',
+    'view-cover', 'view-camera', 'view-album',
+    'cameraVideo', 'cameraPlaceholder', 'cameraPlaceholderText', 'btnRetryCamera',
+    'switchCamBtn', 'shutterBtn', 'controlSpacer', 'status',
+    'btnFullscreenToggle', 'fullscreenLabel', 'iconFullscreen',
+    'albumStatus', 'photoGrid', 'albumMore', 'btnLoadMore',
+    'btnRefreshAlbum', 'btnSelectToggle', 'selectionToolbar', 'selectedCountText',
+    'downloadBarInfo', 'btnExecDownload',
+    'imageModal', 'modalImg', 'modalUploaderName', 'modalDownloadBtn',
+    'nameModal', 'nameInput', 'nameInputHint', 'nameModalCancelBtn', 'pwaModal',
+    'downloadSheet', 'sheetTitle', 'sheetSubtitle', 'optShare', 'optShareTitle', 'optZip', 'optDrive',
+    'progressOverlay', 'progressText', 'progressBar', 'progressSubtext', 'btnCancelProgress',
+    'toastStack'
+  ];
+
+  /* ==========================================================================
+   * 小さなユーティリティ
+   * ======================================================================== */
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /**
+   * localStorage は iOS のプライベートブラウズや一部のアプリ内ブラウザで
+   * 例外を投げます。旧版はそれでアプリ全体が止まっていました。
+   */
+  const Storage = (() => {
+    let memory = {};
+    let usable = true;
+    try {
+      const probe = '__probe__';
+      localStorage.setItem(probe, '1');
+      localStorage.removeItem(probe);
+    } catch (error) {
+      usable = false;
+    }
+    return {
+      get(key) {
+        try { return usable ? (localStorage.getItem(key) || '') : (memory[key] || ''); }
+        catch (error) { return memory[key] || ''; }
+      },
+      set(key, value) {
+        memory[key] = value;
+        try { if (usable) localStorage.setItem(key, value); } catch (error) { /* メモリのみ */ }
+      }
+    };
+  })();
+
+  const getUserName = () => Storage.get(CONFIG.STORAGE_KEY_NAME);
+
+  function ensureJpgName(name) {
+    if (!name) return 'wedding_photo.jpg';
+    return /\.jpe?g$/i.test(name) ? name : name + '.jpg';
+  }
+
+  function base64ToBlob(base64, type) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: type || 'image/jpeg' });
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error('read_failed'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function downloadBlob(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    // 即 revoke するとダウンロードが始まらない端末があるため少し待ちます
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  function canShareFiles(files) {
+    return !!(navigator.canShare && navigator.share && navigator.canShare({ files }));
+  }
+
+  /**
+   * 写真 1 枚を一意に指す ID。
+   *
+   * アップロードが 45 秒でタイムアウトしても、サーバー側は保存を完了している
+   * ことがあります。クライアントは失敗と判断して再送するため、同じ写真だと
+   * サーバーが分かるようにこの ID を毎回同じ値で送ります。
+   * GAS 側は英数字 8〜64 文字だけを受け付けます。
+   */
+  function newClientId() {
+    try {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g, '');
+    } catch (error) { /* 下のフォールバックへ */ }
+
+    const bytes = new Uint8Array(16);
+    try {
+      crypto.getRandomValues(bytes);
+    } catch (error) {
+      for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    let out = '';
+    for (let i = 0; i < 16; i++) out += ('0' + bytes[i].toString(16)).slice(-2);
+    return out;
+  }
+
+  /** 設定にフォルダ ID だけを書かれていても開けるようにします */
+  function resolveDriveUrl(value) {
+    const raw = (value || '').trim();
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    // 相対パスとして window.open すると自分のサイトの 404 に飛びます
+    return 'https://drive.google.com/drive/folders/' + encodeURIComponent(raw);
+  }
+
+  /* ==========================================================================
+   * UI パーツ（alert / confirm は使いません）
+   * ------------------------------------------------------------------------
+   * Android Chrome では全画面表示中に alert / confirm を出すと全画面が解除され、
+   * 撮影に戻れなくなります。自前のトーストとシートに統一します。
+   * ======================================================================== */
+  /** 同時に出せるのは 3 件まで。圏外で連写されると画面が埋まるためです */
+  const TOAST_MAX = 3;
+
+  function toast(message, type, durationMs) {
+    while (els.toastStack.children.length >= TOAST_MAX) {
+      els.toastStack.firstElementChild.remove();
+    }
+    const node = document.createElement('div');
+    node.className = 'toast' + (type ? ' is-' + type : '');
+    node.textContent = message;
+    els.toastStack.appendChild(node);
+    setTimeout(() => node.remove(), durationMs || 4000);
+  }
+
+  function setStatus(message, isError) {
+    els.status.textContent = message || '';
+    els.status.classList.toggle('is-error', !!isError);
+  }
+
+  let statusTimer = null;
+  function setTransientStatus(message, isError, durationMs) {
+    setStatus(message, isError);
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => setStatus(''), durationMs || 1600);
+  }
+
+  const openOverlay = (el) => el.classList.add('is-open');
+  const closeOverlay = (el) => el.classList.remove('is-open');
+
+  function showProgress(text, subtext) {
+    state.cancelRequested = false;
+    els.progressText.textContent = text || '準備しています…';
+    els.progressSubtext.textContent = subtext || 'この画面を開いたままお待ちください';
+    els.progressBar.style.width = '0%';
+    els.btnCancelProgress.hidden = false;
+    openOverlay(els.progressOverlay);
+  }
+
+  function updateProgress(text, ratio) {
+    if (text) els.progressText.textContent = text;
+    if (typeof ratio === 'number') {
+      els.progressBar.style.width = Math.max(0, Math.min(100, ratio * 100)) + '%';
+    }
+  }
+
+  const hideProgress = () => closeOverlay(els.progressOverlay);
+
+  /* ==========================================================================
+   * API
+   * ======================================================================== */
+
+  /**
+   * GAS への POST。
+   *
+   * ⚠️ Content-Type ヘッダーを付けてはいけません。
+   * 付けるとリクエストが「単純リクエスト」から外れてプリフライト（OPTIONS）が
+   * 発生し、GAS は OPTIONS に応答できないため全機能が CORS エラーで死にます。
+   * body は JSON 文字列ですが、Content-Type は既定の text/plain のままにします。
+   * redirect も既定の 'follow' から変えないこと（GAS は 302 を返します）。
+   */
+  async function callApi(action, params, options) {
+    const opts = options || {};
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeout || CONFIG.TIMEOUT_MS);
+
+    try {
+      const body = Object.assign({ action: action }, params || {});
+      if (CONFIG.API_TOKEN) body.token = CONFIG.API_TOKEN;
+
+      const response = await fetch(CONFIG.API_URL, {
+        method: 'POST',
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+
+      const json = await response.json();
+      if (!json.success) {
+        const error = new Error(json.error || '不明なエラー');
+        error.isServerError = true;
+        throw error;
+      }
+      return json;
+    } catch (error) {
+      if (error.name === 'AbortError') throw new Error('通信がタイムアウトしました');
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * 読み取り系の呼び出しを、通信エラーのときだけ自動で再試行します。
+   *
+   * 会場の回線では 1 回の取りこぼしが普通に起きます。旧版は 1 回失敗すると
+   * そのまま「読み込めませんでした」を出していました。
+   * サーバーが success:false を返した場合（設定ミス・枚数オーバーなど）は
+   * 何度やっても直らないので再試行しません。
+   */
+  async function callApiWithRetry(action, params, options, attempts) {
+    const max = attempts || CONFIG.READ_ATTEMPTS;
+    let lastError = null;
+
+    for (let attempt = 0; attempt < max; attempt++) {
+      if (state.cancelRequested) break;
+      try {
+        return await callApi(action, params, options);
+      } catch (error) {
+        lastError = error;
+        if (error.isServerError) break;
+        if (attempt < max - 1) await sleep(1200 * (attempt + 1));
+      }
+    }
+
+    throw lastError || new Error('通信に失敗しました');
+  }
+
+  /* ==========================================================================
+   * 送信キュー（IndexedDB で永続化）
+   * ------------------------------------------------------------------------
+   * 旧版はメモリ上の配列だったため、電波が弱い状態で撮影 → リロード / タブ破棄で
+   * 未送信の写真がすべて消えました。しかも画面には「保存完了」と出ていました。
+   * Blob のまま IndexedDB に置き、起動時に再送します。
+   * （Base64 文字列を localStorage に入れる方法は 5MB 制限で破綻します）
+   * ======================================================================== */
+  const Queue = (() => {
+    const DB_NAME = 'wedcam';
+    const DB_VERSION = 1;
+    const STORE = 'queue';
+    let dbPromise = null;
+    let available = true;
+
+    function openDb() {
+      if (dbPromise) return dbPromise;
+      dbPromise = new Promise((resolve, reject) => {
+        if (!window.indexedDB) { reject(new Error('no_indexeddb')); return; }
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains(STORE)) {
+            db.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      }).catch((error) => {
+        available = false;
+        dbPromise = null;
+        throw error;
+      });
+      return dbPromise;
+    }
+
+    function run(mode, work) {
+      return openDb().then((db) => new Promise((resolve, reject) => {
+        const transaction = db.transaction(STORE, mode);
+        const request = work(transaction.objectStore(STORE));
+        transaction.oncomplete = () => resolve(request ? request.result : undefined);
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      }));
+    }
+
+    /** IndexedDB が使えない環境向けのメモリ退避 */
+    const memoryQueue = [];
+    let memoryId = 1;
+
+    return {
+      isPersistent: () => available,
+
+      async add(item) {
+        if (!available) { memoryQueue.push(Object.assign({ id: memoryId++ }, item)); return; }
+        try { await run('readwrite', (store) => store.add(item)); }
+        catch (error) { available = false; memoryQueue.push(Object.assign({ id: memoryId++ }, item)); }
+      },
+
+      async all() {
+        if (!available) return memoryQueue.slice();
+        try { return (await run('readonly', (store) => store.getAll())) || []; }
+        catch (error) { return memoryQueue.slice(); }
+      },
+
+      /* 旧版の processQueue は 1 枚処理するごとに getAll() で全件を読み直しており、
+         枚数の 2 乗のコストがかかっていました。キーだけ取って 1 件ずつ引きます。 */
+      async allKeys() {
+        if (!available) return memoryQueue.map((item) => item.id);
+        try { return (await run('readonly', (store) => store.getAllKeys())) || []; }
+        catch (error) { return memoryQueue.map((item) => item.id); }
+      },
+
+      async get(id) {
+        if (!available) return memoryQueue.find((item) => item.id === id) || null;
+        try { return (await run('readonly', (store) => store.get(id))) || null; }
+        catch (error) { return memoryQueue.find((item) => item.id === id) || null; }
+      },
+
+      async remove(id) {
+        if (!available) {
+          const index = memoryQueue.findIndex((item) => item.id === id);
+          if (index >= 0) memoryQueue.splice(index, 1);
+          return;
+        }
+        try { await run('readwrite', (store) => store.delete(id)); } catch (error) { /* noop */ }
+      },
+
+      async update(item) {
+        if (!available) {
+          const index = memoryQueue.findIndex((entry) => entry.id === item.id);
+          if (index >= 0) memoryQueue[index] = item;
+          return;
+        }
+        try { await run('readwrite', (store) => store.put(item)); } catch (error) { /* noop */ }
+      }
+    };
+  })();
+
+  /**
+   * キューの件数を数え直します。
+   * failed: true の項目は「打ち切り済み」で、自動送信の対象から外れます。
+   * 削除はしないので、あとから手動で再送できます。
+   */
+  async function refreshQueueCounts() {
+    const items = await Queue.all();
+    state.pendingCount = items.filter((item) => !item.failed).length;
+    state.failedCount = items.filter((item) => item.failed).length;
+    updateQueueBadge();
+    return items;
+  }
+
+  /**
+   * キューを順に送信します。
+   *
+   * 旧版は 1 枚ごとに指数バックオフ（2→4→8→16 秒）を直列で待っていました。
+   * 20 枚撮ってから回線が落ちると 20 ×（2+4+8+16）秒＝約 10 分キューが回り続け、
+   * そのあいだ写真 1 枚ごとにエラートーストが積み上がっていました。
+   * ここでは待ち時間を「1 巡につき 1 回」にまとめ、枚数に比例しないようにします。
+   */
+  async function processQueue() {
+    if (state.isQueueRunning) return;
+
+    // 圏外のうちは 1 枚も試しません（online イベントで再開します）
+    if (navigator.onLine === false) {
+      updateQueueBadge();
+      updatePendingBanner();
+      return;
+    }
+
+    state.isQueueRunning = true;
+
+    let succeeded = 0;
+    let newFailures = 0;
+    let circuitOpen = false;
+    const handled = new Set(); // 打ち切り済み・消えた項目を再読み込みしないため
+
+    try {
+      await refreshQueueCounts();
+
+      /* 送信中に撮られた写真も拾うため、キューが空になるまで巡回します。
+         失敗した巡回だけを failureRounds として数え、MAX_RETRY 回で打ち切ります。
+         成功が続くかぎりは巡回を続けたいので、上限は別に持ちます。 */
+      let failureRounds = 0;
+
+      for (let round = 0; round < 200 && failureRounds <= CONFIG.MAX_RETRY; round++) {
+        const keys = (await Queue.allKeys()).filter((key) => !handled.has(key));
+        if (keys.length === 0) break;
+
+        let didWork = false;
+        let stop = false;
+        let sawRetriableFailure = false;
+        let consecutiveFailures = 0;
+
+        for (const key of keys) {
+          if (navigator.onLine === false) { stop = true; break; }
+
+          const item = await Queue.get(key);
+          if (!item) { handled.add(key); continue; }
+          if (item.failed) { handled.add(key); continue; }
+
+          didWork = true;
+
+          try {
+            const dataUrl = await blobToDataUrl(item.blob);
+            await callApi('upload', {
+              base64Data: dataUrl,
+              userName: item.userName,
+              // 同じ写真の再送だとサーバーが判別できるようにします（二重登録の防止）
+              clientId: item.clientId,
+              // 撮影時刻。これが無いとアルバムが「送信できた順」に並びます
+              capturedAt: item.createdAt,
+              /* 「一度でも送信を試みたか」。retry は再送のたびに 0 に戻すため
+                 別に持ちます。1 以上なら、サーバーは Drive を見て
+                 前回のタイムアウトで既に保存済みでないかを確認します。 */
+              attempt: item.sendAttempts || 0
+            }, { timeout: CONFIG.UPLOAD_TIMEOUT_MS });
+
+            await Queue.remove(key);
+            handled.add(key);
+            succeeded++;
+            consecutiveFailures = 0;
+            state.pendingCount = Math.max(0, state.pendingCount - 1);
+            updateQueueBadge();
+          } catch (error) {
+            item.retry = (item.retry || 0) + 1;
+            // こちらは巻き戻しません（サーバー側の二重登録チェックの判断材料）
+            item.sendAttempts = (item.sendAttempts || 0) + 1;
+            consecutiveFailures++;
+            console.warn('[upload] 失敗 ' + item.retry + '/' + CONFIG.MAX_RETRY, error.message);
+
+            if (item.retry >= CONFIG.MAX_RETRY) {
+              // 削除せず「打ち切り」として残します。写真そのものは端末に残ります
+              item.failed = true;
+              await Queue.update(item);
+              handled.add(key);
+              newFailures++;
+              state.pendingCount = Math.max(0, state.pendingCount - 1);
+              state.failedCount++;
+              updateQueueBadge();
+            } else {
+              await Queue.update(item);
+              sawRetriableFailure = true;
+            }
+
+            /* 3 枚続けて失敗するのは、その写真ではなく回線かサーバーの問題です。
+               残りを総なめしても同じ結果なので、いったん中断します。
+               写真は消さずキューに残るので、通信回復・画面復帰・
+               「今すぐ送信する」のいずれかで再開されます。 */
+            if (consecutiveFailures >= 3) { circuitOpen = true; stop = true; break; }
+          }
+        }
+
+        if (stop || !didWork) break;
+
+        // バックオフは 1 巡につき 1 回だけ。枚数に比例して待たないようにします
+        if (sawRetriableFailure) {
+          failureRounds++;
+          await sleep(Math.min(1000 * Math.pow(2, failureRounds), 30000));
+        }
+      }
+
+      // 通知は 1 本にまとめます（枚数ぶん出すと画面が埋まります）
+      if (circuitOpen) {
+        toast('いま送信できませんでした。電波の良い場所で、表紙画面から再送してください。', 'error', 7000);
+      } else if (newFailures > 0) {
+        toast(newFailures + ' 枚を送信できませんでした。表紙画面から再送できます。', 'error', 7000);
+      } else if (succeeded > 0 && state.currentView === 'camera') {
+        setTransientStatus('✨ 保存しました ✨', false, 1600);
+      }
+    } finally {
+      state.isQueueRunning = false;
+      await refreshQueueCounts();
+      updatePendingBanner();
+    }
+  }
+
+  /**
+   * 打ち切った写真の再送。failed を解除して retry を巻き戻します。
+   * @param {boolean} silent 自動復帰（online イベント）から呼ぶときは通知を控えます
+   * @return {Promise<number>} 巻き戻した枚数
+   */
+  async function reviveFailedUploads(silent) {
+    const items = await Queue.all();
+    const failed = items.filter((item) => item.failed);
+    if (failed.length === 0) return 0;
+
+    for (const item of failed) {
+      item.failed = false;
+      item.retry = 0; // バックオフの巻き戻し。sendAttempts は意図的に残します
+      await Queue.update(item);
+    }
+    await refreshQueueCounts();
+    if (!silent) toast(failed.length + ' 枚の送信を再開します。');
+    return failed.length;
+  }
+
+  async function retryFailedUploads() {
+    const total = state.pendingCount + state.failedCount;
+    if (total === 0) { toast('送信待ちの写真はありません。'); return; }
+
+    await reviveFailedUploads(false);
+    if (navigator.onLine === false) {
+      toast('いまは電波が届いていません。つながり次第、自動で送信します。', 'error', 6000);
+      return;
+    }
+    processQueue();
+  }
+
+  /**
+   * 未送信の写真を端末側に救い出します。
+   *
+   * バナーは「写真は端末に残っています」と言いますが、旧版には IndexedDB から
+   * 取り出す手段がありませんでした。GAS のクォータ超過などで恒久的に送れなく
+   * なった写真が、そのまま閉じ込められてしまいます。
+   *
+   * navigator.share() はユーザー操作の直後にしか呼べないため、
+   * 「準備」→「もう一度タップして保存」の 2 段構えにします。
+   */
+  async function savePendingPhotosLocally() {
+    const button = els.btnSavePendingLocal;
+
+    if (state.pendingLocalFiles) {
+      const files = state.pendingLocalFiles;
+      state.pendingLocalFiles = null;
+      button.textContent = '端末に保存する';
+      try {
+        await navigator.share({ files: files, title: 'Wedding Camera' });
+        toast('写真アプリに保存しました。送信待ちの写真はそのまま残ります。', 'success', 6000);
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.error('[savePendingLocal:share]', error);
+          toast('保存できませんでした。もう一度お試しください。', 'error');
+        }
+      }
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = '準備しています…';
+
+    try {
+      const items = await Queue.all();
+      if (items.length === 0) {
+        toast('端末に残っている写真はありません。');
+        button.textContent = '端末に保存する';
+        return;
+      }
+
+      const files = items.map((item, index) => new File(
+        [item.blob],
+        'wedding_' + String(index + 1).padStart(3, '0') + '.jpg',
+        { type: 'image/jpeg' }
+      ));
+
+      if (files.length <= CONFIG.SHARE_MAX && canShareFiles(files)) {
+        state.pendingLocalFiles = files;
+        button.textContent = '📲 タップして写真アプリに保存';
+        return;
+      }
+
+      // Web Share が使えない / 枚数が多い場合は ZIP に落とします
+      const JSZipLib = await loadJsZip();
+      const zip = new JSZipLib();
+      files.forEach((file) => zip.file(file.name, file));
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+      downloadBlob(blob, 'wedding_unsent_photos.zip');
+      toast(files.length + ' 枚を ZIP で保存しました。「ファイル」アプリをご確認ください。', 'success', 7000);
+      button.textContent = '端末に保存する';
+    } catch (error) {
+      console.error('[savePendingLocal]', error);
+      toast('端末に保存できませんでした。', 'error');
+      button.textContent = '端末に保存する';
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function updateQueueBadge() {
+    const count = state.pendingCount;
+    if (count > 0) {
+      // 圏外なのに「送信中」と出すのは嘘になります
+      const waiting = navigator.onLine === false;
+      els.queueBadgeText.textContent = waiting
+        ? count + ' 枚：電波を待っています'
+        : count + ' 枚を送信中…';
+      els.queueSpinner.hidden = waiting;
+      els.queueBadge.classList.toggle('is-warning', waiting);
+      els.queueBadge.style.display = 'flex';
+    } else if (state.failedCount > 0) {
+      els.queueBadgeText.textContent = '⚠️ ' + state.failedCount + ' 枚が未送信';
+      els.queueSpinner.hidden = true;
+      els.queueBadge.classList.add('is-warning');
+      els.queueBadge.style.display = 'flex';
+    } else {
+      els.queueBadge.style.display = 'none';
+    }
+  }
+
+  function updatePendingBanner() {
+    const total = state.pendingCount + state.failedCount;
+    if (total > 0 && !state.isQueueRunning) {
+      els.pendingBannerText.innerHTML =
+        '<b>送信できていない写真が ' + total + ' 枚あります。</b><br>' +
+        'このページを閉じても写真は端末に残っています。電波の良い場所で「今すぐ送信する」を押してください。<br>' +
+        'どうしても送れないときは「端末に保存する」で写真を取り出せます。';
+      els.pendingBanner.style.display = 'block';
+    } else {
+      els.pendingBanner.style.display = 'none';
+      // 準備済みファイルを抱えたままにしないよう解放します
+      state.pendingLocalFiles = null;
+      els.btnSavePendingLocal.textContent = '端末に保存する';
+    }
+  }
+
+  /* ==========================================================================
+   * 撮影
+   * ======================================================================== */
+
+  /**
+   * video の現在フレームを canvas に描きます。
+   *
+   * 旧版の問題:
+   *  1. drawImage の 5 引数版でソース全体を 540×960 に引き伸ばしていたため、
+   *     4:3 を返す端末では顔が縦に潰れていました（width/height の ideal は
+   *     あくまで希望値で、保証されません）。
+   *  2. videoWidth が 0 の状態（メタデータ取得前・アプリ復帰直後）でも
+   *     撮影でき、真っ黒な画像がアップロードされていました。
+   */
+  function captureFrame(video) {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return null; // 黒画像ガード
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    if (CONFIG.CAPTURE_MODE === 'preview') {
+      // 画面に見えている範囲だけを切り出します（object-fit: cover と同じ計算）
+      const rect = video.getBoundingClientRect();
+      const previewRatio = (rect.width && rect.height) ? rect.width / rect.height : vw / vh;
+
+      let outW, outH;
+      if (previewRatio >= 1) {
+        outW = Math.min(CONFIG.MAX_DIM, vw);
+        outH = Math.round(outW / previewRatio);
+      } else {
+        outH = Math.min(CONFIG.MAX_DIM, vh);
+        outW = Math.round(outH * previewRatio);
+      }
+      canvas.width = outW;
+      canvas.height = outH;
+
+      const scale = Math.max(outW / vw, outH / vh);
+      const srcW = outW / scale;
+      const srcH = outH / scale;
+      ctx.drawImage(video, (vw - srcW) / 2, (vh - srcH) / 2, srcW, srcH, 0, 0, outW, outH);
+    } else {
+      // フレーム全体を、アスペクト比を保ったまま縮小します
+      const scale = Math.min(1, CONFIG.MAX_DIM / Math.max(vw, vh));
+      canvas.width = Math.round(vw * scale);
+      canvas.height = Math.round(vh * scale);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    }
+
+    return canvas;
+  }
+
+  /** toDataURL は同期でメインスレッドを止めるため toBlob を使います */
+  function canvasToBlob(canvas) {
+    return new Promise((resolve, reject) => {
+      if (!canvas.toBlob) {
+        try {
+          resolve(base64ToBlob(canvas.toDataURL('image/jpeg', CONFIG.JPEG_QUALITY).split(',')[1]));
+        } catch (error) { reject(error); }
+        return;
+      }
+      canvas.toBlob(
+        (blob) => blob ? resolve(blob) : reject(new Error('encode_failed')),
+        'image/jpeg',
+        CONFIG.JPEG_QUALITY
+      );
+    });
+  }
+
+  function playFlash() {
+    els.flashEffect.classList.add('flash-active');
+    setTimeout(() => els.flashEffect.classList.remove('flash-active'), 100);
+  }
+
+  async function onShutter() {
+    if (!getUserName()) { askUserName('camera'); return; }
+    if (!state.stream) { await initCamera(); return; }
+    if (state.isCapturing) return; // 連打ガード
+
+    state.isCapturing = true;
+    els.shutterBtn.disabled = true;
+
+    try {
+      const canvas = captureFrame(els.cameraVideo);
+      if (!canvas) {
+        setTransientStatus('カメラの準備中です。少し待ってからもう一度。', true, 2500);
+        return;
+      }
+
+      playFlash();
+
+      const blob = await canvasToBlob(canvas);
+      await Queue.add({
+        blob: blob,
+        userName: getUserName() || 'ゲスト',
+        createdAt: Date.now(),
+        // 再送しても同じ値を送り続けます。サーバー側の二重登録防止に使います
+        clientId: newClientId(),
+        retry: 0
+      });
+
+      await refreshQueueCounts();
+
+      // 「保存完了」はキューが空になってから出します（旧版は push 前に出していました）
+      if (navigator.onLine === false) {
+        setStatus('📵 電波を待っています（写真は端末に保存済み）');
+      } else {
+        setStatus('📤 送信しています…');
+      }
+      processQueue();
+    } catch (error) {
+      console.error('[capture]', error);
+      setTransientStatus('撮影できませんでした。もう一度お試しください。', true, 3000);
+    } finally {
+      setTimeout(() => {
+        state.isCapturing = false;
+        els.shutterBtn.disabled = false;
+      }, CONFIG.SHUTTER_COOLDOWN_MS);
+    }
+  }
+
+  /* ==========================================================================
+   * カメラ制御
+   * ======================================================================== */
+  async function initCamera() {
+    if (state.isCameraStarting) return;
+    state.isCameraStarting = true;
+
+    stopCamera();
+    els.btnRetryCamera.hidden = true;
+    els.cameraPlaceholder.style.display = 'flex';
+    els.cameraPlaceholderText.textContent = '📷 カメラを起動しています…';
+    setStatus('');
+
+    const constraints = {
+      video: {
+        facingMode: { ideal: state.facingMode },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
+      audio: false
+    };
+
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('unsupported');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      state.stream = stream;
+      els.cameraVideo.srcObject = stream;
+
+      // メタデータを待たずにプレースホルダを隠すと一瞬黒画面が見えます
+      await waitForVideoReady(els.cameraVideo);
+      try { await els.cameraVideo.play(); } catch (error) { /* 自動再生の拒否は無視 */ }
+
+      els.cameraPlaceholder.style.display = 'none';
+      await detectMultipleCameras();
+    } catch (error) {
+      console.error('[camera]', error);
+      state.stream = null;
+      els.cameraPlaceholder.style.display = 'flex';
+      els.cameraPlaceholderText.textContent = describeCameraError(error);
+      els.btnRetryCamera.hidden = false;
+    } finally {
+      state.isCameraStarting = false;
+    }
+  }
+
+  function waitForVideoReady(video) {
+    if (video.readyState >= 2 && video.videoWidth) return Promise.resolve();
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = () => { if (!settled) { settled = true; cleanup(); resolve(); } };
+      const cleanup = () => {
+        video.removeEventListener('loadedmetadata', done);
+        video.removeEventListener('canplay', done);
+      };
+      video.addEventListener('loadedmetadata', done);
+      video.addEventListener('canplay', done);
+      setTimeout(done, 4000); // 保険
+    });
+  }
+
+  /** 原因ごとに、次にやることが分かる文言を返します */
+  function describeCameraError(error) {
+    const name = error && error.name;
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      return 'カメラの使用が許可されていません。\nブラウザのアドレスバー横の🔒からカメラを「許可」にして、もう一度お試しください。';
+    }
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      return 'カメラが見つかりませんでした。';
+    }
+    if (name === 'NotReadableError' || name === 'TrackStartError') {
+      return '他のアプリがカメラを使用中です。カメラアプリを閉じてもう一度お試しください。';
+    }
+    if (name === 'OverconstrainedError') {
+      return 'この端末のカメラでは設定を満たせませんでした。もう一度お試しください。';
+    }
+    if (!window.isSecureContext) {
+      return 'カメラは https のページでしか使えません。URL をご確認ください。';
+    }
+    return 'カメラを起動できませんでした。Safari または Chrome で開き直してみてください。';
+  }
+
+  function stopCamera() {
+    if (state.stream) {
+      state.stream.getTracks().forEach((track) => track.stop());
+      state.stream = null;
+    }
+    els.cameraVideo.srcObject = null;
+  }
+
+  /** カメラが 2 つ以上ないときは切替ボタンを出しません */
+  async function detectMultipleCameras() {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter((device) => device.kind === 'videoinput');
+      state.hasMultipleCameras = cameras.length > 1;
+    } catch (error) {
+      state.hasMultipleCameras = true; // 判定できないときは出しておく
+    }
+    els.switchCamBtn.hidden = !state.hasMultipleCameras;
+    els.controlSpacer.hidden = !state.hasMultipleCameras;
+  }
+
+  /**
+   * 前面 / 背面を切り替えます。
+   * 旧版は取得に失敗すると旧ストリームが停止済み・state が null で復帰できませんでした。
+   */
+  async function switchCamera() {
+    const previous = state.facingMode;
+    state.facingMode = (previous === 'environment') ? 'user' : 'environment';
+    await initCamera();
+
+    if (!state.stream) {
+      state.facingMode = previous;
+      await initCamera();
+      if (state.stream) toast('このカメラには切り替えられませんでした。', 'error');
+    }
+  }
+
+  /**
+   * アプリ復帰時の復旧。
+   * iOS はバックグラウンドで track を停止するため、戻ってきたときに
+   * プレビューが真っ黒のまま固まります。track の状態を見て張り直します。
+   */
+  function handleVisibilityChange() {
+    if (document.visibilityState !== 'visible') return;
+
+    if (state.currentView === 'camera') {
+      const tracks = state.stream ? state.stream.getVideoTracks() : [];
+      const isDead = tracks.length === 0 || tracks.some((track) => track.readyState === 'ended');
+      if (isDead) initCamera();
+    }
+
+    // 復帰時に未送信分の送信を再開します。カメラ画面以外でも動かします
+    resumeUploads();
+  }
+
+  /**
+   * 未送信分の送信を再開します。
+   *
+   * 旧版は state.pendingCount > 0 しか見ていませんでした。長く圏外にいると
+   * 全件が failed に落ちて pendingCount が 0 になるため、電波が戻っても
+   * 何も起きず、ゲストが表紙まで戻ってボタンを押すまで送信されませんでした。
+   */
+  async function resumeUploads() {
+    if (state.isQueueRunning) return;
+    if (navigator.onLine === false) { updateQueueBadge(); return; }
+    if (state.pendingCount === 0 && state.failedCount === 0) return;
+
+    if (state.failedCount > 0) await reviveFailedUploads(true);
+    if (state.pendingCount > 0) await processQueue();
+  }
+
+  /* ==========================================================================
+   * 全画面
+   * ------------------------------------------------------------------------
+   * iOS Safari は video 以外の要素に Fullscreen API を提供していません。
+   * 旧版は両分岐が undefined で静かに何も起きず、ボタンだけが残っていました。
+   * 対応していない端末ではボタンを隠し、「ホーム画面に追加」へ誘導します。
+   * ======================================================================== */
+  const Fullscreen = {
+    isSupported() {
+      const el = document.documentElement;
+      return !!(el.requestFullscreen || el.webkitRequestFullscreen);
+    },
+    isActive() {
+      return !!(document.fullscreenElement || document.webkitFullscreenElement);
+    },
+    request() {
+      const el = document.documentElement;
+      try {
+        const result = el.requestFullscreen ? el.requestFullscreen()
+                     : el.webkitRequestFullscreen ? el.webkitRequestFullscreen()
+                     : null;
+        if (result && result.catch) result.catch(() => {});
+      } catch (error) { /* noop */ }
+    },
+    exit() {
+      try {
+        const result = document.exitFullscreen ? document.exitFullscreen()
+                     : document.webkitExitFullscreen ? document.webkitExitFullscreen()
+                     : null;
+        if (result && result.catch) result.catch(() => {});
+      } catch (error) { /* noop */ }
+    }
+  };
+
+  function toggleFullscreen() {
+    if (Fullscreen.isActive()) Fullscreen.exit();
+    else Fullscreen.request();
+  }
+
+  function syncFullscreenUI() {
+    if (!Fullscreen.isSupported()) { els.btnFullscreenToggle.hidden = true; return; }
+    els.btnFullscreenToggle.hidden = false;
+    const active = Fullscreen.isActive();
+    els.fullscreenLabel.textContent = active ? '解除' : '全画面';
+    els.iconFullscreen.innerHTML = active
+      ? '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>'
+      : '<path d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5"/>';
+  }
+
+  /* ==========================================================================
+   * 画面遷移
+   * ======================================================================== */
+  function navigateTo(target) {
+    if ((target === 'camera' || target === 'album') && !getUserName()) {
+      askUserName(target);
+      return;
+    }
+
+    document.querySelectorAll('.view-screen').forEach((el) => el.classList.remove('active'));
+    state.currentView = target;
+
+    if (target === 'camera') {
+      els['view-camera'].classList.add('active');
+      document.body.style.overflow = 'hidden';
+      syncFullscreenUI();
+      initCamera();
+      return;
+    }
+
+    stopCamera();
+    Fullscreen.exit();
+    document.body.style.overflow = '';
+
+    if (target === 'album') {
+      els['view-album'].classList.add('active');
+      loadAlbum(true);
+    } else {
+      els['view-cover'].classList.add('active');
+      updatePendingBanner();
+    }
+  }
+
+  /** 表紙のカメラボタン専用。全画面要求はタップの同期処理内で出す必要があります */
+  function openCameraWithFullscreen() {
+    if (!getUserName()) { askUserName('camera'); return; }
+    if (Fullscreen.isSupported()) Fullscreen.request();
+    navigateTo('camera');
+  }
+
+  /* ==========================================================================
+   * 名前
+   * ======================================================================== */
+  function updateUserNameDisplay() {
+    const name = getUserName();
+    els.displayUserName.textContent = name || '未設定';
+  }
+
+  function askUserName(pendingTarget) {
+    state.pendingNavigation = pendingTarget || null;
+    const current = getUserName();
+    els.nameInput.value = current;
+    els.nameInputHint.textContent = '20 文字まで';
+    els.nameInputHint.classList.remove('is-error');
+    els.nameModalCancelBtn.hidden = !current;
+    openOverlay(els.nameModal);
+    // iOS はモーダル表示直後の focus を無視することがあるため少し遅らせます
+    setTimeout(() => els.nameInput.focus(), 120);
+  }
+
+  function closeNameModal() {
+    closeOverlay(els.nameModal);
+    state.pendingNavigation = null;
+  }
+
+  function saveUserName() {
+    const value = els.nameInput.value.trim();
+    if (!value) {
+      els.nameInputHint.textContent = 'お名前を入力してください';
+      els.nameInputHint.classList.add('is-error');
+      els.nameInput.focus();
+      return;
+    }
+
+    Storage.set(CONFIG.STORAGE_KEY_NAME, value);
+    updateUserNameDisplay();
+    closeOverlay(els.nameModal);
+
+    const target = state.pendingNavigation;
+    state.pendingNavigation = null;
+    if (target === 'camera') openCameraWithFullscreen();
+    else if (target) navigateTo(target);
+  }
+
+  /* ==========================================================================
+   * アルバム
+   * ======================================================================== */
+  async function loadAlbum(reset) {
+    if (state.isAlbumLoading) return;
+    state.isAlbumLoading = true;
+    els.btnRefreshAlbum.disabled = true;
+    els.btnLoadMore.disabled = true;
+
+    if (reset) {
+      state.albumImages = [];
+      state.nextPageToken = null;
+      state.selectedIds.clear();
+      els.photoGrid.innerHTML = '';
+      els.albumMore.hidden = true;
+      els.albumStatus.textContent = '読み込んでいます…';
+    }
+
+    try {
+      const response = await callApiWithRetry('getAlbum', {
+        pageToken: state.nextPageToken,
+        pageSize: CONFIG.ALBUM_PAGE_SIZE
+      });
+
+      state.albumImages = state.albumImages.concat(response.data || []);
+      state.nextPageToken = response.nextPageToken || null;
+
+      if (state.albumImages.length === 0) {
+        els.albumStatus.innerHTML =
+          '<strong>まだ写真がありません</strong>最初の 1 枚を撮ってみませんか📸';
+        els.albumStatus.style.display = 'block';
+      } else {
+        els.albumStatus.style.display = 'none';
+        renderGrid();
+      }
+
+      els.albumMore.hidden = !state.nextPageToken;
+      updateDownloadBarUI();
+    } catch (error) {
+      console.error('[album]', error);
+      if (state.albumImages.length === 0) {
+        els.albumStatus.style.display = 'block';
+        els.albumStatus.innerHTML =
+          '<strong>アルバムを読み込めませんでした</strong>' +
+          '電波の状況をご確認ください。<br>' +
+          '<button data-action="refresh-album">もう一度読み込む</button>';
+      } else {
+        toast('続きを読み込めませんでした。もう一度お試しください。', 'error');
+      }
+    } finally {
+      state.isAlbumLoading = false;
+      els.btnRefreshAlbum.disabled = false;
+      els.btnLoadMore.disabled = false;
+    }
+  }
+
+  /**
+   * グリッドを描画します。
+   * 差分ではなく全描画ですが、ページサイズが 30 なので実用上問題ありません。
+   */
+  function renderGrid() {
+    els.photoGrid.classList.toggle('select-mode-active', state.isSelectMode);
+    els.photoGrid.innerHTML = '';
+
+    const fragment = document.createDocumentFragment();
+
+    state.albumImages.forEach((imgData) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'grid-item';
+      item.dataset.id = imgData.id;
+      item.setAttribute('aria-label', (imgData.uploader || 'ゲスト') + ' さんの写真');
+      if (state.selectedIds.has(imgData.id)) item.classList.add('selected');
+
+      const img = document.createElement('img');
+      img.src = imgData.thumbnailUrl;
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.alt = '';
+      // Drive が一時的に 429 を返すことがあるため 1 回だけ再試行します
+      img.dataset.retried = '0';
+      img.onerror = function () {
+        if (this.dataset.retried === '0') {
+          this.dataset.retried = '1';
+          const self = this;
+          setTimeout(() => { self.src = imgData.thumbnailUrl + '&r=' + Date.now(); }, 1200);
+        } else {
+          item.classList.add('is-broken');
+        }
+      };
+
+      const checkbox = document.createElement('div');
+      checkbox.className = 'select-checkbox';
+      checkbox.textContent = '✓';
+      checkbox.setAttribute('aria-hidden', 'true');
+
+      item.appendChild(img);
+      item.appendChild(checkbox);
+      fragment.appendChild(item);
+    });
+
+    els.photoGrid.appendChild(fragment);
+  }
+
+  function toggleSelectMode() {
+    state.isSelectMode = !state.isSelectMode;
+
+    if (state.isSelectMode) {
+      els.btnSelectToggle.classList.add('active');
+      els.btnSelectToggle.textContent = '完了';
+      els.selectionToolbar.style.display = 'flex';
+    } else {
+      els.btnSelectToggle.classList.remove('active');
+      els.btnSelectToggle.textContent = '☑ 選択モード';
+      els.selectionToolbar.style.display = 'none';
+      // 旧版は選択状態が残り、チェックマークも表示されたままでした
+      state.selectedIds.clear();
+    }
+
+    renderGrid();
+    updateDownloadBarUI();
+  }
+
+  function toggleSelection(id, element) {
+    if (state.selectedIds.has(id)) {
+      state.selectedIds.delete(id);
+      element.classList.remove('selected');
+    } else {
+      state.selectedIds.add(id);
+      element.classList.add('selected');
+    }
+    updateDownloadBarUI();
+  }
+
+  function updateDownloadBarUI() {
+    const total = state.albumImages.length;
+    const selected = state.selectedIds.size;
+
+    if (state.isSelectMode) {
+      els.downloadBarInfo.textContent = '全 ' + total + ' 枚中 ' + selected + ' 枚';
+      els.selectedCountText.textContent = selected + ' 枚選択中';
+      els.btnExecDownload.textContent = '⬇️ ' + selected + ' 枚を保存';
+      els.btnExecDownload.disabled = selected === 0;
+    } else {
+      els.downloadBarInfo.textContent = '全 ' + total + ' 枚' + (state.nextPageToken ? '以上' : '');
+      els.btnExecDownload.textContent = '⬇️ 表示中の ' + total + ' 枚を保存';
+      els.btnExecDownload.disabled = total === 0;
+    }
+  }
+
+  /* ==========================================================================
+   * プレビューモーダル
+   * ======================================================================== */
+  function openImageModal(imgData) {
+    els.modalImg.src = imgData.highResUrl;
+    els.modalImg.alt = (imgData.uploader || 'ゲスト') + ' さんの写真';
+    els.modalUploaderName.textContent = imgData.uploader || 'ゲスト';
+
+    const button = els.modalDownloadBtn;
+    button.textContent = '⬇️ 保存する';
+    button.disabled = false;
+    button.onclick = () => saveSinglePhoto(imgData, button);
+
+    openOverlay(els.imageModal);
+  }
+
+  function closeImageModal() {
+    closeOverlay(els.imageModal);
+    els.modalImg.src = '';
+  }
+
+  /**
+   * 1 枚保存。
+   *
+   * iOS で写真アプリに入れるには Web Share API が必要ですが、
+   * navigator.share() はユーザー操作の直後にしか呼べません。
+   * そのため「取得」→「もう一度タップして保存」の 2 段構えにします。
+   */
+  async function saveSinglePhoto(imgData, button) {
+    const fileName = ensureJpgName(imgData.name);
+    button.disabled = true;
+    button.textContent = '⏳ 取得しています…';
+
+    try {
+      const response = await callApiWithRetry('getSingleBase64', { fileId: imgData.id });
+      const blob = base64ToBlob(response.data, 'image/jpeg');
+      const file = new File([blob], fileName, { type: 'image/jpeg' });
+
+      if (canShareFiles([file])) {
+        button.textContent = '📲 タップして写真に保存';
+        button.disabled = false;
+        button.onclick = async () => {
+          try {
+            await navigator.share({ files: [file] });
+          } catch (error) {
+            if (error.name !== 'AbortError') downloadBlob(blob, fileName);
+          }
+        };
+      } else {
+        downloadBlob(blob, fileName);
+        button.textContent = '✨ 保存しました';
+        setTimeout(() => {
+          button.textContent = '⬇️ 保存する';
+          button.disabled = false;
+          button.onclick = () => saveSinglePhoto(imgData, button);
+        }, 2200);
+      }
+    } catch (error) {
+      console.error('[saveSingle]', error);
+      toast('写真を取得できませんでした。' + error.message, 'error');
+      button.textContent = '⬇️ 保存する';
+      button.disabled = false;
+    }
+  }
+
+  /* ==========================================================================
+   * 一括保存
+   * ------------------------------------------------------------------------
+   * 旧版は 500ms 間隔で <a download> を連続クリックしていましたが、
+   * iOS Safari は 1 回の操作に対する複数ファイルの自動ダウンロードを
+   * ブロックするため、ゲストの多くが iPhone だと実質動きません。
+   * 「Web Share（写真アプリに直接）」「ZIP 1 ファイル」「Drive で開く」を用意します。
+   * ======================================================================== */
+  function getDownloadTargets() {
+    if (state.isSelectMode && state.selectedIds.size > 0) {
+      return state.albumImages.filter((img) => state.selectedIds.has(img.id));
+    }
+    return state.albumImages.slice();
+  }
+
+  function openDownloadSheet() {
+    const targets = getDownloadTargets();
+    if (targets.length === 0) return;
+
+    state.preparedFiles = null;
+    els.sheetTitle.textContent = targets.length + ' 枚を保存';
+
+    // 空ファイルで能力判定してからボタンを出します
+    const probe = new File([new Blob([new Uint8Array([0xFF, 0xD8, 0xFF])])], 'probe.jpg', { type: 'image/jpeg' });
+    const canShare = canShareFiles([probe]);
+    const tooManyToShare = targets.length > CONFIG.SHARE_MAX;
+    const shareOk = canShare && !tooManyToShare;
+
+    /* 写真アプリに直接入るのは Web Share のときだけです。ZIP は「ファイル」アプリに
+       落ちるので、ゲストが欲しいものになりません。選べない理由を必ず伝えます。 */
+    let subtitle = '保存方法を選んでください。';
+    if (canShare && tooManyToShare) {
+      subtitle = CONFIG.SHARE_MAX + ' 枚までなら写真アプリに直接保存できます。'
+        + '選択モードで ' + CONFIG.SHARE_MAX + ' 枚ずつ選ぶのがおすすめです。';
+    } else if (targets.length > 30) {
+      subtitle = '枚数が多いので Drive をおすすめします。';
+    }
+    els.sheetSubtitle.textContent = subtitle;
+
+    els.optShare.hidden = !shareOk;
+    els.optShareTitle.textContent = '写真アプリに保存';
+    els.optShare.disabled = false;
+
+    els.optDrive.hidden = !resolveDriveUrl(CONFIG.DRIVE_FOLDER_URL);
+
+    openOverlay(els.downloadSheet);
+  }
+
+  const closeDownloadSheet = () => closeOverlay(els.downloadSheet);
+
+  /**
+   * 対象をすべて取得します。GAS 側の BATCH_MAX に合わせて分割します。
+   * @return {Promise<Array<{name: string, blob: Blob}>>}
+   */
+  async function fetchAllBlobs(targets) {
+    const results = [];
+    let missing = 0;
+
+    for (let i = 0; i < targets.length; i += CONFIG.DOWNLOAD_CHUNK) {
+      if (state.cancelRequested) break;
+
+      const chunk = targets.slice(i, i + CONFIG.DOWNLOAD_CHUNK);
+      updateProgress(
+        '取得しています… ' + Math.min(i + chunk.length, targets.length) + '/' + targets.length,
+        i / targets.length
+      );
+
+      try {
+        /* 旧版はリトライ無し・タイムアウト 25 秒だったため、1 回の取りこぼしで
+           5 枚まとめて欠落していました。会場の回線では 5 枚分の Base64（3MB 前後）に
+           25 秒では届きません。 */
+        const response = await callApiWithRetry(
+          'getBatchBase64',
+          { fileIds: chunk.map((img) => img.id) },
+          { timeout: CONFIG.BATCH_TIMEOUT_MS }
+        );
+        chunk.forEach((img) => {
+          const base64 = response.data && response.data[img.id];
+          if (base64) results.push({ name: ensureJpgName(img.name), blob: base64ToBlob(base64, 'image/jpeg') });
+          else missing++;
+        });
+      } catch (error) {
+        console.warn('[bulk] チャンク失敗', error.message);
+        missing += chunk.length;
+      }
+    }
+
+    if (missing > 0) toast(missing + ' 枚は取得できませんでした。', 'error', 6000);
+    return results;
+  }
+
+  async function saveViaShare() {
+    const targets = getDownloadTargets();
+    closeDownloadSheet();
+    showProgress('取得しています…', '写真アプリに渡す準備をしています');
+
+    try {
+      const items = await fetchAllBlobs(targets);
+      hideProgress();
+      if (state.cancelRequested) { toast('保存を中止しました。'); return; }
+      if (items.length === 0) { toast('写真を取得できませんでした。', 'error'); return; }
+
+      const files = items.map((item) => new File([item.blob], item.name, { type: 'image/jpeg' }));
+      if (!canShareFiles(files)) {
+        toast('この枚数はまとめて渡せませんでした。ZIP でお試しください。', 'error');
+        return;
+      }
+
+      // share() は必ずユーザー操作の直後に呼ぶ必要があるため、
+      // シートを再表示してボタンを押してもらいます
+      state.preparedFiles = files;
+      els.sheetTitle.textContent = '準備ができました';
+      els.sheetSubtitle.textContent = items.length + ' 枚の写真を保存できます。';
+      els.optShareTitle.textContent = 'タップして写真アプリに保存';
+      els.optShare.hidden = false;
+      els.optZip.hidden = false;
+      openOverlay(els.downloadSheet);
+    } catch (error) {
+      hideProgress();
+      console.error('[share]', error);
+      toast('保存を準備できませんでした。', 'error');
+    }
+  }
+
+  async function executeShare() {
+    const files = state.preparedFiles;
+    if (!files) { saveViaShare(); return; }
+
+    closeDownloadSheet();
+    try {
+      await navigator.share({ files: files, title: 'Wedding Camera' });
+      toast('写真アプリに保存しました。', 'success');
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        console.error('[share:execute]', error);
+        toast('保存できませんでした。ZIP でお試しください。', 'error');
+      }
+    } finally {
+      state.preparedFiles = null;
+    }
+  }
+
+  /** JSZip は使うときだけ読み込みます（会場の回線を無駄に使わないため） */
+  function loadJsZip() {
+    if (window.JSZip) return Promise.resolve(window.JSZip);
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = CONFIG.JSZIP_URL;
+      script.onload = () => window.JSZip ? resolve(window.JSZip) : reject(new Error('jszip_missing'));
+      script.onerror = () => reject(new Error('jszip_load_failed'));
+      document.head.appendChild(script);
+      setTimeout(() => reject(new Error('jszip_timeout')), 15000);
+    });
+  }
+
+  async function saveViaZip() {
+    const targets = getDownloadTargets();
+    closeDownloadSheet();
+    showProgress('取得しています…', 'ZIP にまとめています');
+
+    try {
+      const JSZipLib = await loadJsZip();
+      const items = await fetchAllBlobs(targets);
+      if (state.cancelRequested) { hideProgress(); toast('保存を中止しました。'); return; }
+      if (items.length === 0) { hideProgress(); toast('写真を取得できませんでした。', 'error'); return; }
+
+      updateProgress('ZIP を作成しています…', 0.9);
+      const zip = new JSZipLib();
+      items.forEach((item, index) => {
+        // 同名衝突を避けるため連番を前置します
+        zip.file(String(index + 1).padStart(3, '0') + '_' + item.name, item.blob);
+      });
+
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+      els.btnCancelProgress.hidden = true;
+      updateProgress('保存しています…', 1);
+      downloadBlob(blob, 'wedding_photos.zip');
+
+      els.progressText.textContent = '✅ 保存しました';
+      els.progressSubtext.textContent = '「ファイル」アプリのダウンロードフォルダに入っています。';
+      setTimeout(hideProgress, 2600);
+    } catch (error) {
+      hideProgress();
+      console.error('[zip]', error);
+      if (String(error.message).indexOf('jszip') === 0) {
+        toast('ZIP 機能を読み込めませんでした。1 枚ずつ保存するか Drive をお使いください。', 'error', 7000);
+      } else {
+        toast('ZIP を作成できませんでした。', 'error');
+      }
+    }
+  }
+
+  function saveViaDrive() {
+    closeDownloadSheet();
+    const url = resolveDriveUrl(CONFIG.DRIVE_FOLDER_URL);
+    if (url) window.open(url, '_blank', 'noopener');
+  }
+
+  /* ==========================================================================
+   * アプリ内ブラウザ判定
+   * ======================================================================== */
+  function checkInAppBrowser() {
+    const ua = navigator.userAgent || navigator.vendor || '';
+    const patterns = [/Line\//i, /FBAN|FBAV|FB_IAB/i, /Instagram/i, /Twitter/i, /MicroMessenger/i];
+    if (patterns.some((pattern) => pattern.test(ua))) openOverlay(els.inappWarning);
+  }
+
+  /* ==========================================================================
+   * イベント配線
+   * ------------------------------------------------------------------------
+   * インライン onclick + グローバル関数をやめ、data-action の委譲に集約します。
+   * ======================================================================== */
+  const ACTIONS = {
+    'dismiss-inapp': () => closeOverlay(els.inappWarning),
+    'edit-name': () => askUserName(null),
+    'open-camera': openCameraWithFullscreen,
+    'open-album': () => navigateTo('album'),
+    'back-to-cover': () => navigateTo('cover'),
+    'show-pwa-guide': () => openOverlay(els.pwaModal),
+    'close-pwa-modal': () => closeOverlay(els.pwaModal),
+    'retry-uploads': retryFailedUploads,
+    'save-pending-local': savePendingPhotosLocally,
+    'toggle-fullscreen': toggleFullscreen,
+    'retry-camera': () => initCamera(),
+    'switch-camera': switchCamera,
+    'shoot': onShutter,
+    'refresh-album': () => loadAlbum(true),
+    'load-more': () => loadAlbum(false),
+    'toggle-select-mode': toggleSelectMode,
+    'select-all': () => {
+      state.albumImages.forEach((img) => state.selectedIds.add(img.id));
+      renderGrid();
+      updateDownloadBarUI();
+    },
+    'deselect-all': () => {
+      state.selectedIds.clear();
+      renderGrid();
+      updateDownloadBarUI();
+    },
+    'open-download-sheet': openDownloadSheet,
+    'close-download-sheet': () => { closeDownloadSheet(); state.preparedFiles = null; },
+    'save-via-share': () => state.preparedFiles ? executeShare() : saveViaShare(),
+    'save-via-zip': saveViaZip,
+    'save-via-drive': saveViaDrive,
+    'close-image-modal': closeImageModal,
+    'save-name': saveUserName,
+    'close-name-modal': closeNameModal,
+    'cancel-progress': () => { state.cancelRequested = true; els.progressText.textContent = '中止しています…'; }
+  };
+
+  function wireEvents() {
+    document.addEventListener('click', (event) => {
+      const actionEl = event.target.closest('[data-action]');
+      if (actionEl) {
+        const handler = ACTIONS[actionEl.dataset.action];
+        if (handler) { handler(); return; }
+      }
+
+      // グリッドのタップ
+      const gridItem = event.target.closest('.grid-item');
+      if (gridItem) {
+        const imgData = state.albumImages.find((img) => img.id === gridItem.dataset.id);
+        if (!imgData) return;
+        if (state.isSelectMode) toggleSelection(imgData.id, gridItem);
+        else openImageModal(imgData);
+        return;
+      }
+
+      // 背景タップで閉じる
+      const backdrop = event.target.closest('[data-close-on-backdrop]');
+      if (backdrop && event.target === backdrop) {
+        closeOverlay(backdrop);
+        if (backdrop === els.imageModal) els.modalImg.src = '';
+        if (backdrop === els.downloadSheet) state.preparedFiles = null;
+      }
+    });
+
+    els.nameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); saveUserName(); }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      if (els.imageModal.classList.contains('is-open')) closeImageModal();
+      else if (els.downloadSheet.classList.contains('is-open')) ACTIONS['close-download-sheet']();
+      else if (els.pwaModal.classList.contains('is-open')) closeOverlay(els.pwaModal);
+    });
+
+    document.addEventListener('fullscreenchange', syncFullscreenUI);
+    document.addEventListener('webkitfullscreenchange', syncFullscreenUI);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    window.addEventListener('online', async () => {
+      const total = state.pendingCount + state.failedCount;
+      if (total === 0) return;
+      toast('通信が回復しました。送信を再開します。');
+      await resumeUploads();
+    });
+
+    // 圏外に落ちたらバッジの文言を「電波を待っています」に切り替えます
+    window.addEventListener('offline', () => {
+      updateQueueBadge();
+      updatePendingBanner();
+    });
+
+    // 未送信があるうちは離脱を確認します（打ち切り済みも未送信です）
+    window.addEventListener('beforeunload', (event) => {
+      if (state.pendingCount + state.failedCount > 0) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    });
+  }
+
+  /* ==========================================================================
+   * 起動
+   * ======================================================================== */
+  async function init() {
+    ELEMENT_IDS.forEach((id) => { els[id] = document.getElementById(id); });
+
+    els.status.textContent = '';
+    checkInAppBrowser();
+    updateUserNameDisplay();
+    syncFullscreenUI();
+    wireEvents();
+
+    if (!CONFIG.API_URL || CONFIG.API_URL.indexOf('/exec') === -1) {
+      toast('API の URL が設定されていません。管理者にお知らせください。', 'error', 9000);
+    }
+
+    // 前回終了時の未送信分を復元して再送します
+    try {
+      const items = await refreshQueueCounts();
+      if (items.length > 0) {
+        /* 打ち切り済みも起動時に一度だけ再挑戦します。
+           旧版はここで全項目を書き戻していました（mutate してから
+           !item.failed で絞ったため、条件が全件に一致していました）。 */
+        await reviveFailedUploads(true);
+
+        if (navigator.onLine === false) {
+          toast('未送信の写真が ' + items.length + ' 枚あります。電波が届き次第、自動で送信します。', null, 7000);
+        } else {
+          toast('前回送信できなかった写真が ' + items.length + ' 枚あります。送信を再開します。', null, 6000);
+          processQueue();
+        }
+      }
+      updatePendingBanner();
+    } catch (error) {
+      console.warn('[init] キューを復元できませんでした', error);
+    }
+
+    // Service Worker（オフライン時のリロードで真っ白になるのを防ぎます）
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>

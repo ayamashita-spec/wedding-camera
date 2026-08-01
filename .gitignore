@@ -1,0 +1,15 @@
+# 配信先ごとの設定（GAS の URL・トークン・Drive フォルダ）
+# 本番は GitHub Actions が Secrets から生成します。絶対にコミットしないこと。
+config.js
+
+# Windows / macOS が勝手に作るもの
+desktop.ini
+Thumbs.db
+ehthumbs.db
+.DS_Store
+
+# エディタ・ツール
+.claude/
+.vscode/
+.idea/
+*.swp

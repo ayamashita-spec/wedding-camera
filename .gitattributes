@@ -1,0 +1,8 @@
+# 改行は LF に統一します（Windows で編集しても差分が汚れないように）
+* text=auto eol=lf
+
+# バイナリは変換しない
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary

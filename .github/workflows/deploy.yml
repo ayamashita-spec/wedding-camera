@@ -1,0 +1,73 @@
+name: Deploy to GitHub Pages
+
+# main に push するたびに配信されます。
+# Actions タブから手動実行（Run workflow）もできます。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同時デプロイを避けます。走行中のものは取り消さず、順に流します
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: チェックアウト
+        uses: actions/checkout@v4
+
+      # リポジトリに config.js は入っていません（.gitignore 済み）。
+      # ここで Secrets から組み立てて、配信物にだけ含めます。
+      - name: Secrets から config.js を生成
+        env:
+          API_URL: ${{ secrets.WEDCAM_API_URL }}
+          API_TOKEN: ${{ secrets.WEDCAM_API_TOKEN }}
+          DRIVE_FOLDER_URL: ${{ secrets.WEDCAM_DRIVE_FOLDER_URL }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const cfg = {
+              API_URL: process.env.API_URL || "",
+              API_TOKEN: process.env.API_TOKEN || "",
+              DRIVE_FOLDER_URL: process.env.DRIVE_FOLDER_URL || ""
+            };
+            if (!cfg.API_URL) {
+              console.error("::error::WEDCAM_API_URL が未設定です。Settings → Secrets and variables → Actions で登録してください。");
+              process.exit(1);
+            }
+            if (!/^https:\/\/script\.google\.com\/.*\/exec$/.test(cfg.API_URL)) {
+              console.error("::error::WEDCAM_API_URL が GAS の /exec URL ではありません: " + cfg.API_URL);
+              process.exit(1);
+            }
+            fs.writeFileSync("config.js",
+              "/* GitHub Actions が生成しました。直接編集しないでください。 */\n" +
+              "window.WEDCAM_CONFIG = " + JSON.stringify(cfg, null, 2) + ";\n");
+            console.log("config.js を生成しました（API_TOKEN " +
+              (cfg.API_TOKEN ? "あり" : "なし") + " / DRIVE_FOLDER_URL " +
+              (cfg.DRIVE_FOLDER_URL ? "あり" : "なし") + "）");
+          '
+
+      # 生成した config.js を配信物に含めるため、ここでは除外しません
+      - name: Pages の設定
+        uses: actions/configure-pages@v5
+
+      - name: 配信物をアップロード
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: デプロイ
+        id: deployment
+        uses: actions/deploy-pages@v4
