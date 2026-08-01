@@ -136,6 +136,8 @@
     .btn-mode-camera:active { transform: scale(0.96); }
     .btn-mode-album { background: #fff; color: #444; border: 1.5px solid var(--wedding-gold); }
     .btn-mode-album:active { transform: scale(0.96); background: #fafafa; }
+    .btn-mode-upload { background: #fff; color: #444; border: 1.5px solid var(--wedding-pink); }
+    .btn-mode-upload:active { transform: scale(0.96); background: #fff8fa; }
 
     /* 未送信の写真がある場合の通知 */
     .pending-banner {
@@ -290,28 +292,35 @@
       }
     }
 
-    /* ── iPhone 向けの全画面ヒント ─────────────────────────
-       iOS Safari は Fullscreen API を video にしか提供していないため、
-       アドレスバーを消す手段が「ホーム画面に追加」しかありません。
-       Android では全画面ボタンが使えるので出しません。 */
-    .ios-fs-hint {
+    /* ── カメラ画面のヒント ────────────────────────────────
+       複数出ても重ならないよう 1 つの縦積みコンテナにまとめます。 */
+    .camera-hints {
       position: absolute; z-index: 24;
       left: 12px; right: 12px; bottom: calc(120px + env(safe-area-inset-bottom));
+      display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+    }
+    .camera-hint {
       display: none; align-items: flex-start; gap: 8px;
       padding: 10px 12px; border-radius: 12px;
       background: rgba(0, 0, 0, 0.62);
       backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
       border: 1px solid rgba(255, 255, 255, 0.22);
       color: #fff; font-size: 11px; line-height: 1.6; text-align: left;
+      pointer-events: auto;
     }
-    .ios-fs-hint.is-visible { display: flex; }
-    .ios-fs-hint p { margin: 0; flex: 1; }
-    .ios-fs-hint button {
+    .camera-hint.is-visible { display: flex; }
+    .camera-hint p { margin: 0; flex: 1; }
+    .camera-hint .hint-close {
       background: none; border: none; color: #fff; opacity: 0.7;
       font-size: 16px; line-height: 1; padding: 2px 4px; cursor: pointer; flex: none;
     }
+    .camera-hint .hint-action {
+      background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.4);
+      color: #fff; border-radius: 14px; padding: 5px 10px; margin-top: 6px;
+      font-size: 11px; font-weight: 700; cursor: pointer;
+    }
     @media (orientation: landscape) {
-      .ios-fs-hint { right: 105px; bottom: calc(10px + env(safe-area-inset-bottom)); }
+      .camera-hints { right: 105px; bottom: calc(10px + env(safe-area-inset-bottom)); }
     }
 
     #flashEffect {
@@ -661,10 +670,16 @@
         <button class="btn-mode-select btn-mode-camera" id="btnOpenCamera" data-action="open-camera">
           <span aria-hidden="true">📷</span> カメラを起動する
         </button>
+        <button class="btn-mode-select btn-mode-upload" id="btnPickPhotos" data-action="pick-photos">
+          <span aria-hidden="true">📤</span> 端末の写真をアップロード
+        </button>
         <button class="btn-mode-select btn-mode-album" data-action="open-album">
           <span aria-hidden="true">🖼️</span> 共有アルバムを見る
         </button>
       </div>
+
+      <!-- 端末のカメラロールから選ぶための入力。ボタンから click() します -->
+      <input type="file" id="filePicker" accept="image/*" multiple hidden>
 
     </div>
 
@@ -700,14 +715,28 @@
       </div>
     </div>
 
-    <!-- iPhone のみ。全画面ボタンが使えない端末への代替案内 -->
-    <div class="ios-fs-hint" id="iosFsHint">
-      <p>
-        <b>📲 全画面で使うには</b><br>
-        画面下の共有ボタン（□に↑）→「ホーム画面に追加」。
-        追加したアイコンから開くとアドレスバーが消えます。
-      </p>
-      <button data-action="dismiss-ios-hint" aria-label="この案内を閉じる">×</button>
+    <div class="camera-hints">
+      <!-- 画面の自動回転がオフだと横向き写真が撮れないため、その案内 -->
+      <div class="camera-hint" id="rotateHint">
+        <p>
+          <b>📱 横向きの写真を撮るには</b><br>
+          <span id="rotateHintOs">端末の「画面の自動回転」をオンにしてください。</span>
+          <button class="hint-action" data-action="enable-tilt" id="btnEnableTilt" hidden>
+            オンにできない場合はこちら
+          </button>
+        </p>
+        <button class="hint-close" data-action="dismiss-rotate-hint" aria-label="この案内を閉じる">×</button>
+      </div>
+
+      <!-- iPhone のみ。全画面ボタンが使えない端末への代替案内 -->
+      <div class="camera-hint" id="iosFsHint">
+        <p>
+          <b>📲 全画面で使うには</b><br>
+          画面下の共有ボタン（□に↑）→「ホーム画面に追加」。
+          追加したアイコンから開くとアドレスバーが消えます。
+        </p>
+        <button class="hint-close" data-action="dismiss-ios-hint" aria-label="この案内を閉じる">×</button>
+      </div>
     </div>
 
     <div class="camera-controls-overlay">
@@ -924,7 +953,11 @@
 
     JSZIP_URL: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
     STORAGE_KEY_NAME: 'wedding_guest_name',
-    STORAGE_KEY_IOS_HINT: 'wedding_ios_fs_hint'
+    STORAGE_KEY_IOS_HINT: 'wedding_ios_fs_hint',
+    STORAGE_KEY_ROTATE_HINT: 'wedding_rotate_hint',
+
+    /** 1 回のアップロードで選べる枚数の上限。端末のメモリを守るため */
+    PICK_MAX: 30
   };
 
   /* ==========================================================================
@@ -962,7 +995,11 @@
 
     /** 写真の受付状況。判定できないときは開いている扱いにします */
     uploadOpen: true,
-    uploadClosedMessage: ''
+    uploadClosedMessage: '',
+
+    /** 傾きセンサーで判定した端末の向き。null は「まだ分からない」 */
+    physicalLandscape: null,
+    orientationSensorOn: false
   };
 
   const els = {};
@@ -974,6 +1011,7 @@
     'cameraVideo', 'cameraPlaceholder', 'cameraPlaceholderText', 'btnRetryCamera',
     'switchCamBtn', 'shutterBtn', 'controlSpacer', 'status', 'recentShots',
     'btnFullscreenToggle', 'fullscreenLabel', 'iconFullscreen', 'iosFsHint',
+    'rotateHint', 'rotateHintOs', 'btnEnableTilt', 'btnPickPhotos', 'filePicker',
     'albumStatus', 'photoGrid', 'albumMore', 'btnLoadMore',
     'btnRefreshAlbum', 'btnSelectToggle', 'selectionToolbar', 'selectedCountText',
     'downloadBarInfo', 'btnExecDownload',
@@ -1655,20 +1693,80 @@
     els.uploadClosedNotice.textContent = state.uploadClosedMessage
       || '写真の受付は終了しました。アルバムはこれまでどおりご覧いただけます。';
     els.btnOpenCamera.disabled = closed;
+    els.btnPickPhotos.disabled = closed;
   }
 
   /* ==========================================================================
    * 撮影
    * ======================================================================== */
 
+  /* ==========================================================================
+   * 端末の向き
+   * ------------------------------------------------------------------------
+   * OS の「画面の自動回転」を Web ページからオンにする API はありません。
+   * 自動回転がオフだと、端末を横に構えても画面は縦のままで、
+   * screen.orientation も縦のままです（＝横写真が撮れない）。
+   *
+   * そこで傾きセンサーを併用します。画面が回らなくても、端末が物理的に
+   * どちら向きかは分かるので、そちらを優先して撮影範囲を決めます。
+   * Android は許可不要、iOS 13 以降はユーザー操作からの許可が要るため
+   * ヒントのボタン経由にしています。
+   * ======================================================================== */
+  function applyDeviceOrientation(event) {
+    const gamma = event.gamma; // 左右の傾き
+    const beta = event.beta;   // 前後の傾き
+    if (typeof gamma !== 'number' || typeof beta !== 'number') return;
+
+    const g = Math.abs(gamma);
+    const b = Math.abs(beta);
+    // ほぼ水平に寝かせているときは判定できないので、前の値を保ちます
+    if (Math.abs(g - b) < 15) return;
+    state.physicalLandscape = g > b;
+  }
+
+  /** iOS 13 以降は明示的な許可が必要です */
+  function needsMotionPermission() {
+    return typeof DeviceOrientationEvent !== 'undefined'
+      && typeof DeviceOrientationEvent.requestPermission === 'function';
+  }
+
+  function startOrientationSensor() {
+    if (state.orientationSensorOn) return false;
+    if (typeof window.DeviceOrientationEvent === 'undefined') return false;
+    window.addEventListener('deviceorientation', applyDeviceOrientation);
+    state.orientationSensorOn = true;
+    return true;
+  }
+
+  /** ヒントのボタンから呼びます（iOS の許可はユーザー操作の直後が必須） */
+  async function enableTiltDetection() {
+    if (!needsMotionPermission()) {
+      startOrientationSensor();
+      toast('端末の傾きで向きを判定します。', 'success');
+      dismissRotateHint();
+      return;
+    }
+    try {
+      const result = await DeviceOrientationEvent.requestPermission();
+      if (result === 'granted') {
+        startOrientationSensor();
+        toast('端末の傾きで向きを判定します。横に構えると横写真になります。', 'success', 6000);
+        dismissRotateHint();
+        return;
+      }
+    } catch (error) { /* 下の案内へ */ }
+    toast('許可が得られませんでした。端末の「画面の自動回転」をオンにしてお試しください。', 'error', 7000);
+  }
+
   /**
    * 端末が横向きかどうか。
    *
-   * 端末によって使える API が違うため 3 段構えにします。
-   * screen.orientation が最も確実で、iOS の古い Safari は window.orientation、
-   * どちらも無い環境（PC など）は単純に画面の縦横比で判定します。
+   * 傾きセンサーが使えるならそれを最優先します（画面回転がロックされていても
+   * 正しく判定できるため）。使えない場合は画面の向きで判断します。
    */
   function isLandscape() {
+    if (state.physicalLandscape !== null) return state.physicalLandscape;
+
     try {
       const angle = screen.orientation && screen.orientation.angle;
       if (typeof angle === 'number') return angle === 90 || angle === 270;
@@ -1866,6 +1964,122 @@
         els.shutterBtn.disabled = false;
       }, CONFIG.SHUTTER_COOLDOWN_MS);
     }
+  }
+
+  /* ==========================================================================
+   * 端末の写真をアップロード
+   * ------------------------------------------------------------------------
+   * アプリ内で撮った写真だけでなく、既にカメラロールにある写真も送れるように
+   * します。撮り直してもらうより、良い写真がそのまま集まります。
+   * ======================================================================== */
+
+  /** 画像ファイルを、EXIF の回転を反映したうえでデコードします */
+  function decodeImageFile(file) {
+    if (window.createImageBitmap) {
+      /* iPhone の写真は EXIF に回転情報を持つことが多く、そのまま canvas に
+         描くと横倒しになります。imageOrientation で反映させます。 */
+      return createImageBitmap(file, { imageOrientation: 'from-image' })
+        .catch(() => createImageBitmap(file))
+        .catch(() => decodeViaImgElement(file));
+    }
+    return decodeViaImgElement(file);
+  }
+
+  function decodeViaImgElement(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+      image.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode_failed')); };
+      image.src = url;
+    });
+  }
+
+  /**
+   * 選ばれたファイルを、撮影時と同じ画質・サイズに揃えて Blob にします。
+   * 撮影と違い切り出しはしません（すでに本人が構図を決めているため）。
+   */
+  async function fileToUploadBlob(file) {
+    const source = await decodeImageFile(file);
+    const width = source.naturalWidth || source.width;
+    const height = source.naturalHeight || source.height;
+    if (!width || !height) throw new Error('decode_failed');
+
+    const scale = Math.min(1, CONFIG.MAX_DIM / Math.max(width, height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+    if (source.close) source.close(); // ImageBitmap の解放
+
+    return canvasToBlob(canvas);
+  }
+
+  function openPhotoPicker() {
+    if (!getUserName()) { askUserName(null); return; }
+    if (!state.uploadOpen) {
+      toast(state.uploadClosedMessage || '写真の受付は終了しました。', 'error', 6000);
+      return;
+    }
+    els.filePicker.value = ''; // 同じ写真を選び直せるように
+    els.filePicker.click();
+  }
+
+  async function handlePickedFiles(fileList) {
+    const all = Array.from(fileList || []);
+    if (all.length === 0) return;
+
+    const files = all.slice(0, CONFIG.PICK_MAX);
+    const overflow = all.length - files.length;
+
+    showProgress('写真を読み込んでいます…', 'この画面を開いたままお待ちください');
+    let added = 0;
+    let skipped = 0;
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        if (state.cancelRequested) break;
+        updateProgress('読み込んでいます… ' + (i + 1) + '/' + files.length, i / files.length);
+
+        try {
+          const blob = await fileToUploadBlob(files[i]);
+          await Queue.add({
+            blob: blob,
+            userName: getUserName() || 'ゲスト',
+            /* 撮影時刻はファイルの更新日時を使います。これでアルバムが
+               「アップロードした順」ではなく「撮った順」に並びます。 */
+            createdAt: files[i].lastModified || Date.now(),
+            clientId: newClientId(),
+            retry: 0
+          });
+          added++;
+        } catch (error) {
+          console.warn('[pick] 読み込めませんでした', files[i].name, error.message);
+          skipped++;
+        }
+      }
+    } finally {
+      hideProgress();
+    }
+
+    await refreshQueueCounts();
+    updatePendingBanner();
+
+    if (added === 0) {
+      toast('写真を読み込めませんでした。別の写真でお試しください。', 'error', 6000);
+      return;
+    }
+
+    let message = added + ' 枚を送信します。';
+    if (skipped > 0) message += ' ' + skipped + ' 枚は読み込めませんでした。';
+    if (overflow > 0) message += ' 一度に選べるのは ' + CONFIG.PICK_MAX + ' 枚までです。';
+    toast(message, 'success', 7000);
+
+    processQueue();
   }
 
   /* ==========================================================================
@@ -2101,6 +2315,33 @@
     els.iosFsHint.classList.remove('is-visible');
   }
 
+  function dismissRotateHint() {
+    Storage.set(CONFIG.STORAGE_KEY_ROTATE_HINT, 'dismissed');
+    els.rotateHint.classList.remove('is-visible');
+  }
+
+  /**
+   * 「画面の自動回転をオンに」の案内。
+   *
+   * 自動回転は OS の設定で、Web ページからは変更できません。案内するしかない
+   * ぶん、OS ごとに操作手順を書き分けます。傾きセンサーが既に効いていれば
+   * 向きは正しく判定できるので、この案内は出しません。
+   */
+  function syncRotateHint() {
+    const show = state.currentView === 'camera'
+      && !state.orientationSensorOn
+      && Storage.get(CONFIG.STORAGE_KEY_ROTATE_HINT) !== 'dismissed';
+
+    if (show) {
+      els.rotateHintOs.textContent = isIos()
+        ? '画面右上から下にスワイプ → 鍵マーク（🔒）を押して回転ロックを解除してください。'
+        : '画面上から下にスワイプ → 「自動回転」をオンにしてください。';
+      // 許可さえ取れれば、自動回転がオフのままでも横写真が撮れます
+      els.btnEnableTilt.hidden = !needsMotionPermission();
+    }
+    els.rotateHint.classList.toggle('is-visible', show);
+  }
+
   function syncFullscreenUI() {
     if (!Fullscreen.isSupported()) { els.btnFullscreenToggle.hidden = true; return; }
     els.btnFullscreenToggle.hidden = false;
@@ -2127,6 +2368,9 @@
       els['view-camera'].classList.add('active');
       document.body.style.overflow = 'hidden';
       syncFullscreenUI();
+      // 許可が要らない端末（Android など）は黙って傾き判定を始めます
+      if (!needsMotionPermission()) startOrientationSensor();
+      syncRotateHint();
       syncIosFullscreenHint();
       initCamera();
       return;
@@ -2135,6 +2379,7 @@
     stopCamera();
     Fullscreen.exit();
     els.iosFsHint.classList.remove('is-visible');
+    els.rotateHint.classList.remove('is-visible');
     clearRecentShots(); // objectURL を解放します
     document.body.style.overflow = '';
 
@@ -2689,6 +2934,9 @@
     'save-pending-local': savePendingPhotosLocally,
     'toggle-fullscreen': toggleFullscreen,
     'dismiss-ios-hint': dismissIosFullscreenHint,
+    'dismiss-rotate-hint': dismissRotateHint,
+    'enable-tilt': enableTiltDetection,
+    'pick-photos': openPhotoPicker,
     'retry-camera': () => initCamera(),
     'switch-camera': switchCamera,
     'shoot': onShutter,
@@ -2741,6 +2989,13 @@
         if (backdrop === els.imageModal) els.modalImg.src = '';
         if (backdrop === els.downloadSheet) state.preparedFiles = null;
       }
+    });
+
+    els.filePicker.addEventListener('change', (event) => {
+      // value をクリアすると FileList が空になる実装があるため、先に配列へ写します
+      const files = Array.from(event.target.files || []);
+      els.filePicker.value = ''; // 次回また同じ写真を選べるように
+      handlePickedFiles(files);
     });
 
     els.nameInput.addEventListener('keydown', (event) => {
