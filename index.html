@@ -254,6 +254,30 @@
       }
     }
 
+    /* ── iPhone 向けの全画面ヒント ─────────────────────────
+       iOS Safari は Fullscreen API を video にしか提供していないため、
+       アドレスバーを消す手段が「ホーム画面に追加」しかありません。
+       Android では全画面ボタンが使えるので出しません。 */
+    .ios-fs-hint {
+      position: absolute; z-index: 24;
+      left: 12px; right: 12px; bottom: calc(120px + env(safe-area-inset-bottom));
+      display: none; align-items: flex-start; gap: 8px;
+      padding: 10px 12px; border-radius: 12px;
+      background: rgba(0, 0, 0, 0.62);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      color: #fff; font-size: 11px; line-height: 1.6; text-align: left;
+    }
+    .ios-fs-hint.is-visible { display: flex; }
+    .ios-fs-hint p { margin: 0; flex: 1; }
+    .ios-fs-hint button {
+      background: none; border: none; color: #fff; opacity: 0.7;
+      font-size: 16px; line-height: 1; padding: 2px 4px; cursor: pointer; flex: none;
+    }
+    @media (orientation: landscape) {
+      .ios-fs-hint { right: 105px; bottom: calc(10px + env(safe-area-inset-bottom)); }
+    }
+
     #flashEffect {
       position: fixed; inset: 0; background: #fff;
       z-index: 9990; opacity: 0; pointer-events: none; transition: opacity 0.4s ease-out;
@@ -628,6 +652,16 @@
       </div>
     </div>
 
+    <!-- iPhone のみ。全画面ボタンが使えない端末への代替案内 -->
+    <div class="ios-fs-hint" id="iosFsHint">
+      <p>
+        <b>📲 全画面で使うには</b><br>
+        画面下の共有ボタン（□に↑）→「ホーム画面に追加」。
+        追加したアイコンから開くとアドレスバーが消えます。
+      </p>
+      <button data-action="dismiss-ios-hint" aria-label="この案内を閉じる">×</button>
+    </div>
+
     <div class="camera-controls-overlay">
       <div class="camera-controls">
         <button class="switch-cam-btn" id="switchCamBtn" data-action="switch-camera" hidden
@@ -840,7 +874,8 @@
     SHARE_MAX: 20,
 
     JSZIP_URL: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
-    STORAGE_KEY_NAME: 'wedding_guest_name'
+    STORAGE_KEY_NAME: 'wedding_guest_name',
+    STORAGE_KEY_IOS_HINT: 'wedding_ios_fs_hint'
   };
 
   /* ==========================================================================
@@ -880,7 +915,7 @@
     'view-cover', 'view-camera', 'view-album',
     'cameraVideo', 'cameraPlaceholder', 'cameraPlaceholderText', 'btnRetryCamera',
     'switchCamBtn', 'shutterBtn', 'controlSpacer', 'status',
-    'btnFullscreenToggle', 'fullscreenLabel', 'iconFullscreen',
+    'btnFullscreenToggle', 'fullscreenLabel', 'iconFullscreen', 'iosFsHint',
     'albumStatus', 'photoGrid', 'albumMore', 'btnLoadMore',
     'btnRefreshAlbum', 'btnSelectToggle', 'selectionToolbar', 'selectedCountText',
     'downloadBarInfo', 'btnExecDownload',
@@ -1859,6 +1894,35 @@
     else Fullscreen.request();
   }
 
+  /** ホーム画面から起動しているか（standalone 表示か） */
+  function isStandalone() {
+    if (navigator.standalone === true) return true; // iOS
+    try { return window.matchMedia('(display-mode: standalone)').matches; }
+    catch (error) { return false; }
+  }
+
+  /**
+   * iPhone だけに出す全画面の代替案内。
+   *
+   * iOS Safari は Fullscreen API を video 要素にしか提供していないため、
+   * 全画面ボタンが使えません。唯一の手段が「ホーム画面に追加」なので、
+   * ボタンを隠すだけでなく代わりの導線を示します。
+   * 一度閉じたら二度と出しません（撮影の邪魔をしないため）。
+   */
+  function syncIosFullscreenHint() {
+    const show = state.currentView === 'camera'
+      && isIos()
+      && !Fullscreen.isSupported()
+      && !isStandalone()
+      && Storage.get(CONFIG.STORAGE_KEY_IOS_HINT) !== 'dismissed';
+    els.iosFsHint.classList.toggle('is-visible', show);
+  }
+
+  function dismissIosFullscreenHint() {
+    Storage.set(CONFIG.STORAGE_KEY_IOS_HINT, 'dismissed');
+    els.iosFsHint.classList.remove('is-visible');
+  }
+
   function syncFullscreenUI() {
     if (!Fullscreen.isSupported()) { els.btnFullscreenToggle.hidden = true; return; }
     els.btnFullscreenToggle.hidden = false;
@@ -1885,12 +1949,14 @@
       els['view-camera'].classList.add('active');
       document.body.style.overflow = 'hidden';
       syncFullscreenUI();
+      syncIosFullscreenHint();
       initCamera();
       return;
     }
 
     stopCamera();
     Fullscreen.exit();
+    els.iosFsHint.classList.remove('is-visible');
     document.body.style.overflow = '';
 
     if (target === 'album') {
@@ -2408,6 +2474,7 @@
     'retry-uploads': retryFailedUploads,
     'save-pending-local': savePendingPhotosLocally,
     'toggle-fullscreen': toggleFullscreen,
+    'dismiss-ios-hint': dismissIosFullscreenHint,
     'retry-camera': () => initCamera(),
     'switch-camera': switchCamera,
     'shoot': onShutter,
