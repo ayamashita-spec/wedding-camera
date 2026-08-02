@@ -138,6 +138,12 @@
     .btn-mode-album:active { transform: scale(0.96); background: #fafafa; }
     .btn-mode-upload { background: #fff; color: #444; border: 1.5px solid var(--wedding-pink); }
     .btn-mode-upload:active { transform: scale(0.96); background: #fff8fa; }
+    .btn-mode-archive {
+      background: #f7f4ef; color: #5f5346; border: 1.5px dashed #c9b79c;
+      font-size: 13px; box-shadow: none;
+    }
+    .btn-mode-archive:active { transform: scale(0.96); }
+    .btn-mode-archive[hidden] { display: none; }
 
     /* 未送信の写真がある場合の通知 */
     .pending-banner {
@@ -155,6 +161,14 @@
        これが無いと、キュー内の写真は取り出す手段がありません。 */
     .pending-banner button.is-secondary {
       background: #fff; color: #7a5a1e; border: 1px solid #dcb877;
+    }
+    .pending-banner button.is-danger {
+      background: #fff; color: var(--danger); border: 1px solid var(--danger);
+      font-size: 11px; padding: 8px;
+    }
+    /* 1 回目のタップで確認状態にします（写真が消えるので誤タップ防止） */
+    .pending-banner button.is-danger.is-confirming {
+      background: var(--danger); color: #fff;
     }
     .pending-banner button:disabled { opacity: 0.55; }
 
@@ -419,6 +433,14 @@
       to   { background-position: -120% 0; }
     }
     .queue-status-badge > * { position: relative; z-index: 1; }
+    .queue-stop {
+      background: rgba(255,255,255,0.28); border: none; color: #fff;
+      width: 18px; height: 18px; border-radius: 50%; padding: 0; margin-left: 2px;
+      font-size: 11px; line-height: 1; cursor: pointer; flex: none;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .queue-stop[hidden] { display: none; }
     .queue-spinner {
       width: 10px; height: 10px; border-radius: 50%;
       border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff;
@@ -714,9 +736,12 @@
   <div id="flashEffect" aria-hidden="true"></div>
 
   <!-- 同期バッジ：カメラ / アルバムどちらにいても見えるよう body 直下に置いています -->
-  <div class="queue-status-badge" id="queueBadge" role="status" aria-live="polite">
+  <div class="queue-status-badge" id="queueBadge">
     <span class="queue-spinner" id="queueSpinner" aria-hidden="true"></span>
-    <span id="queueBadgeText"></span>
+    <span id="queueBadgeText" role="status" aria-live="polite"></span>
+    <!-- 送信が長引いたときに待たされ続けないよう、その場で止められるようにします -->
+    <button class="queue-stop" id="btnCancelUpload" data-action="cancel-uploads"
+            aria-label="送信を停止する" hidden>✕</button>
   </div>
 
   <!-- ══ 表紙 ══════════════════════════════════════════ -->
@@ -754,6 +779,9 @@
         <button class="btn-mode-select btn-mode-album" data-action="open-album">
           <span aria-hidden="true">🖼️</span> 共有アルバムを見る
         </button>
+        <!-- 撮ったものは自動で端末に控えています。取り出しはここから 1 タップ -->
+        <button class="btn-mode-select btn-mode-archive" id="btnSaveArchive"
+                data-action="save-archive" hidden></button>
       </div>
 
       <!-- 端末のカメラロールから選ぶための入力。ボタンから click() します -->
@@ -767,6 +795,10 @@
       <button data-action="retry-uploads">今すぐ送信する</button>
       <button data-action="save-pending-local" id="btnSavePendingLocal" class="is-secondary">
         端末に保存する
+      </button>
+      <!-- どうしても送れないときに、送信待ちを消して身軽にするための逃げ道 -->
+      <button data-action="discard-pending" id="btnDiscardPending" class="is-danger">
+        送信待ちを破棄する
       </button>
     </div>
   </div>
@@ -1056,6 +1088,10 @@
     /** 1 回のアップロードで選べる枚数の上限。端末のメモリを守るため */
     PICK_MAX: 30,
 
+    /* 端末側に残す控えの上限。これを超えたら古いものから捨てます。
+       端末の空き容量を食い潰さないための歯止めです。 */
+    ARCHIVE_MAX_BYTES: 300 * 1024 * 1024,
+
     /* --- 動画 -------------------------------------------------------------
        写真と違い、動画は容量がそのまま送信時間になります。GAS へは Base64
        （1.33 倍に膨らむ）で送るため、会場の回線では長い動画ほど失敗します。
@@ -1123,7 +1159,16 @@
     streamHasAudio: false,
 
     /** いま送信中の 1 件。バッジの表示に使います */
-    upload: { active: false, isVideo: false, bytes: 0, startedAt: 0 }
+    upload: { active: false, isVideo: false, bytes: 0, startedAt: 0 },
+
+    /** 実行中の送信。中断ボタンから abort します */
+    activeUpload: null,
+    /** 送信の停止要求。processQueue のループが見ます */
+    cancelQueue: false,
+
+    /** 端末側に控えてある件数と、share() 直前まで持つファイル */
+    archiveCount: 0,
+    archiveFiles: null
   };
 
   const els = {};
@@ -1131,6 +1176,7 @@
     'inappWarning', 'inappHintIos', 'inappHintAndroid', 'inappHintGeneric',
     'flashEffect', 'queueBadge', 'queueBadgeText', 'queueSpinner',
     'displayUserName', 'pendingBanner', 'pendingBannerText', 'btnSavePendingLocal',
+    'btnDiscardPending', 'btnCancelUpload', 'btnSaveArchive',
     'view-cover', 'view-camera', 'view-album',
     'cameraVideo', 'cameraPlaceholder', 'cameraPlaceholderText', 'btnRetryCamera',
     'switchCamBtn', 'shutterBtn', 'controlSpacer', 'status', 'recentShots',
@@ -1326,6 +1372,10 @@
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), opts.timeout || CONFIG.TIMEOUT_MS);
 
+    /* 送信が長引いたときに利用者が中断できるよう、実行中の通信を握っておきます。
+       タイムアウト（最長 3 分）を待たせずに止められるようにするためです。 */
+    if (opts.cancellable) state.activeUpload = controller;
+
     try {
       const body = Object.assign({ action: action }, params || {});
       if (CONFIG.API_TOKEN) body.token = CONFIG.API_TOKEN;
@@ -1348,10 +1398,17 @@
       }
       return json;
     } catch (error) {
-      if (error.name === 'AbortError') throw new Error('通信がタイムアウトしました');
+      if (error.name === 'AbortError') {
+        // 利用者が止めたのか、時間切れかを区別します
+        const stopped = new Error(state.cancelQueue
+          ? '送信を停止しました' : '通信がタイムアウトしました');
+        if (state.cancelQueue) stopped.wasCancelled = true;
+        throw stopped;
+      }
       throw error;
     } finally {
       clearTimeout(timer);
+      if (opts.cancellable && state.activeUpload === controller) state.activeUpload = null;
     }
   }
 
@@ -1367,7 +1424,7 @@
    * 経過時間と件数で行います（偽のパーセンテージは出しません）。
    */
   function postUpload(params, timeoutMs) {
-    return callApi('upload', params, { timeout: timeoutMs });
+    return callApi('upload', params, { timeout: timeoutMs, cancellable: true });
   }
 
   /**
@@ -1404,10 +1461,15 @@
    * Blob のまま IndexedDB に置き、起動時に再送します。
    * （Base64 文字列を localStorage に入れる方法は 5MB 制限で破綻します）
    * ======================================================================== */
+  const DB_NAME = 'wedcam';
+  /* v2 で archive ストアを追加しました（撮影データの端末側の控え）。
+     queue は送信できたら消えますが、archive は残します。 */
+  const DB_VERSION = 2;
+  const STORE_QUEUE = 'queue';
+  const STORE_ARCHIVE = 'archive';
+
   const Queue = (() => {
-    const DB_NAME = 'wedcam';
-    const DB_VERSION = 1;
-    const STORE = 'queue';
+    const STORE = STORE_QUEUE;
     let dbPromise = null;
     let available = true;
 
@@ -1418,8 +1480,12 @@
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         request.onupgradeneeded = () => {
           const db = request.result;
-          if (!db.objectStoreNames.contains(STORE)) {
-            db.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+          // 2 つのストアはここでまとめて作ります（onupgradeneeded は 1 回しか来ません）
+          if (!db.objectStoreNames.contains(STORE_QUEUE)) {
+            db.createObjectStore(STORE_QUEUE, { keyPath: 'id', autoIncrement: true });
+          }
+          if (!db.objectStoreNames.contains(STORE_ARCHIVE)) {
+            db.createObjectStore(STORE_ARCHIVE, { keyPath: 'id', autoIncrement: true });
           }
         };
         request.onsuccess = () => resolve(request.result);
@@ -1448,6 +1514,8 @@
 
     return {
       isPersistent: () => available,
+      /** Archive も同じ DB を使うので共有します */
+      openDb: openDb,
 
       /** @return {Promise<number>} 採番されたキー。サムネイルの紐づけに使います */
       async add(item) {
@@ -1506,6 +1574,155 @@
     };
   })();
 
+  /* ==========================================================================
+   * 端末側の控え（自動保存）
+   * ------------------------------------------------------------------------
+   * Web ページから端末のカメラロールへ無音で書き込む手段はありません
+   * （<a download> は iOS で自動実行が塞がれ、Web Share は毎回タップが要る）。
+   * そこで撮ったものは必ず端末内（IndexedDB）に控えを残し、
+   * 取り出しは表紙のボタン 1 タップでできるようにします。
+   * 送信が成功しても消しません。送信の成否と端末の控えは別物です。
+   * ======================================================================== */
+  const Archive = (() => {
+    const STORE = STORE_ARCHIVE;
+    let available = true;
+
+    function run(mode, work) {
+      return Queue.openDb().then((db) => new Promise((resolve, reject) => {
+        const transaction = db.transaction(STORE, mode);
+        const request = work(transaction.objectStore(STORE));
+        transaction.oncomplete = () => resolve(request ? request.result : undefined);
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      }));
+    }
+
+    return {
+      async add(item) {
+        if (!available) return null;
+        try { return await run('readwrite', (store) => store.add(item)); }
+        catch (error) { available = false; console.warn('[archive] 保存できません', error); return null; }
+      },
+      async all() {
+        if (!available) return [];
+        try { return (await run('readonly', (store) => store.getAll())) || []; }
+        catch (error) { return []; }
+      },
+      async keys() {
+        if (!available) return [];
+        try { return (await run('readonly', (store) => store.getAllKeys())) || []; }
+        catch (error) { return []; }
+      },
+      async remove(id) {
+        if (!available) return;
+        try { await run('readwrite', (store) => store.delete(id)); } catch (error) { /* noop */ }
+      }
+    };
+  })();
+
+  /**
+   * 撮ったものを端末側に控えます。送信とは独立して動きます。
+   * 容量が上限を超えたら古いものから捨てます（端末の空きを食い潰さないため）。
+   */
+  async function archiveCapture(blob, kind) {
+    try {
+      await Archive.add({
+        blob: blob,
+        kind: kind,
+        createdAt: Date.now(),
+        userName: getUserName() || 'ゲスト'
+      });
+      await pruneArchive();
+      await refreshArchiveCount();
+    } catch (error) {
+      console.warn('[archive] 控えを残せませんでした', error);
+    }
+  }
+
+  async function pruneArchive() {
+    const items = await Archive.all();
+    let total = items.reduce((sum, item) => sum + (item.blob ? item.blob.size : 0), 0);
+    if (total <= CONFIG.ARCHIVE_MAX_BYTES) return;
+
+    // 古い順に消します
+    items.sort((a, b) => a.createdAt - b.createdAt);
+    for (const item of items) {
+      if (total <= CONFIG.ARCHIVE_MAX_BYTES) break;
+      total -= item.blob ? item.blob.size : 0;
+      await Archive.remove(item.id);
+    }
+  }
+
+  async function refreshArchiveCount() {
+    state.archiveCount = (await Archive.keys()).length;
+    updateArchiveUI();
+  }
+
+  function updateArchiveUI() {
+    const count = state.archiveCount;
+    els.btnSaveArchive.hidden = count === 0;
+    els.btnSaveArchive.textContent = '📥 この端末で撮った ' + count + ' 件を保存';
+  }
+
+  /**
+   * 控えを端末に取り出します。
+   * navigator.share() はユーザー操作の直後にしか呼べないので 2 段構えです。
+   */
+  async function exportArchive() {
+    const button = els.btnSaveArchive;
+
+    if (state.archiveFiles) {
+      const files = state.archiveFiles;
+      state.archiveFiles = null;
+      updateArchiveUI();
+      try {
+        await navigator.share({ files: files, title: 'Wedding Camera' });
+        toast('端末に保存しました。', 'success', 5000);
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.error('[archive:share]', error);
+          toast('保存できませんでした。もう一度お試しください。', 'error');
+        }
+      }
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = '準備しています…';
+
+    try {
+      const items = (await Archive.all()).sort((a, b) => a.createdAt - b.createdAt);
+      if (items.length === 0) { toast('控えがありません。'); updateArchiveUI(); return; }
+
+      const files = items.map((item, index) => {
+        const isVideo = item.kind === 'video';
+        const ext = isVideo ? extensionForMime(item.blob.type) : '.jpg';
+        const name = 'wedding_' + String(index + 1).padStart(3, '0') + ext;
+        return new File([item.blob], name, { type: item.blob.type || 'image/jpeg' });
+      });
+
+      if (files.length <= CONFIG.SHARE_MAX && canShareFiles(files)) {
+        state.archiveFiles = files;
+        button.textContent = '📲 タップして写真アプリに保存';
+        return;
+      }
+
+      const JSZipLib = await loadJsZip();
+      const zip = new JSZipLib();
+      files.forEach((file) => zip.file(file.name, file));
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+      downloadBlob(blob, 'wedding_my_photos.zip');
+      toast(files.length + ' 件を ZIP で保存しました。', 'success', 7000);
+      updateArchiveUI();
+    } catch (error) {
+      console.error('[archive:export]', error);
+      toast('端末に保存できませんでした。', 'error');
+      updateArchiveUI();
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   /**
    * キューの件数を数え直します。
    * failed: true の項目は「打ち切り済み」で、自動送信の対象から外れます。
@@ -1527,8 +1744,25 @@
    * そのあいだ写真 1 枚ごとにエラートーストが積み上がっていました。
    * ここでは待ち時間を「1 巡につき 1 回」にまとめ、枚数に比例しないようにします。
    */
+  /**
+   * 送信を止めます。
+   *
+   * 実行中の通信も abort します。動画のタイムアウトは 3 分あるので、
+   * これが無いと「送信中」のまま何分も待たされます。
+   * 写真そのものはキューに残すので、あとから再送も端末保存もできます。
+   */
+  function cancelUploads() {
+    if (!state.isQueueRunning && state.pendingCount === 0) return;
+    state.cancelQueue = true;
+    if (state.activeUpload) {
+      try { state.activeUpload.abort(); } catch (error) { /* noop */ }
+    }
+    toast('送信を停止しました。写真は端末に残っています。', null, 6000);
+  }
+
   async function processQueue() {
     if (state.isQueueRunning) return;
+    state.cancelQueue = false; // 前回の停止要求を持ち越さない
 
     // 圏外のうちは 1 枚も試しません（online イベントで再開します）
     if (navigator.onLine === false) {
@@ -1563,6 +1797,7 @@
         let consecutiveFailures = 0;
 
         for (const key of keys) {
+          if (state.cancelQueue) { stop = true; break; }
           if (navigator.onLine === false) { stop = true; break; }
 
           const item = await Queue.get(key);
@@ -1599,6 +1834,16 @@
             endUploadProgress();
           } catch (error) {
             endUploadProgress();
+
+            /* 利用者が止めた場合。失敗ではないので retry は増やしません。
+               ただし途中までサーバーに届いている可能性があるので、
+               sendAttempts は進めて次回は重複チェックを通します。 */
+            if (error.wasCancelled || state.cancelQueue) {
+              item.sendAttempts = (item.sendAttempts || 0) + 1;
+              await Queue.update(item);
+              stop = true;
+              break;
+            }
 
             /* 受付終了。何度送っても通らないので、リトライせず即座に打ち切ります。
                写真は端末に残るので「端末に保存する」で取り出せます。 */
@@ -1658,7 +1903,9 @@
       }
 
       // 通知は 1 本にまとめます（枚数ぶん出すと画面が埋まります）
-      if (uploadClosedHit) {
+      if (state.cancelQueue) {
+        // cancelUploads() 側で既に知らせているので、ここでは重ねません
+      } else if (uploadClosedHit) {
         toast(state.uploadClosedMessage
           + '未送信の写真は表紙画面の「端末に保存する」で取り出せます。', 'error', 9000);
       } else if (circuitOpen) {
@@ -1694,6 +1941,55 @@
     await refreshQueueCounts();
     if (!silent) toast(failed.length + ' 枚の送信を再開します。');
     return failed.length;
+  }
+
+  /**
+   * 送信待ちを破棄します。
+   *
+   * 写真が消えるので 2 段階にします。端末側の控え（自動保存）は消しません。
+   */
+  let discardConfirmTimer = null;
+
+  function resetDiscardButton() {
+    clearTimeout(discardConfirmTimer);
+    els.btnDiscardPending.classList.remove('is-confirming');
+    els.btnDiscardPending.textContent = '送信待ちを破棄する';
+    els.btnDiscardPending.disabled = false;
+  }
+
+  async function discardPendingUploads() {
+    const button = els.btnDiscardPending;
+
+    if (!button.classList.contains('is-confirming')) {
+      button.classList.add('is-confirming');
+      button.textContent = '⚠️ もう一度押すと送信待ちを消します';
+      clearTimeout(discardConfirmTimer);
+      discardConfirmTimer = setTimeout(resetDiscardButton, 5000);
+      return;
+    }
+
+    clearTimeout(discardConfirmTimer);
+    button.disabled = true;
+    button.textContent = '削除しています…';
+
+    // 走っていれば先に止めます（消しながら送るのを避けるため）
+    cancelUploads();
+    for (let i = 0; i < 30 && state.isQueueRunning; i++) await sleep(100);
+
+    try {
+      const keys = await Queue.allKeys();
+      for (const key of keys) await Queue.remove(key);
+      await refreshQueueCounts();
+      clearRecentShots();
+      toast(keys.length + ' 件の送信待ちを消しました。'
+        + '端末に自動保存された控えは残っています。', null, 7000);
+    } catch (error) {
+      console.error('[discard]', error);
+      toast('削除できませんでした。', 'error');
+    } finally {
+      resetDiscardButton();
+      updatePendingBanner();
+    }
   }
 
   async function retryFailedUploads() {
@@ -1832,6 +2128,8 @@
       els.queueSpinner.hidden = waiting;
       els.queueBadge.classList.toggle('is-warning', waiting);
       els.queueBadge.classList.toggle('is-sending', up.active && !waiting);
+      // 実際に送信が動いているときだけ停止ボタンを出します
+      els.btnCancelUpload.hidden = !(state.isQueueRunning && !waiting);
       els.queueBadge.style.display = 'flex';
     } else if (state.failedCount > 0) {
       els.queueBadgeText.textContent = '⚠️ ' + state.failedCount + ' 枚が未送信';
@@ -2160,6 +2458,8 @@
 
       // サーバーの応答を待たず、その場で手応えを返します
       addRecentShot(queueKey, blob);
+      // 送信の成否とは別に、端末側へ必ず控えを残します
+      archiveCapture(blob, 'photo');
 
       await refreshQueueCounts();
 
@@ -2522,6 +2822,8 @@
         retry: 0
       });
       addRecentShot(queueKey, blob, true);
+      // 送信の成否とは別に、端末側へ必ず控えを残します
+      archiveCapture(blob, 'video');
       await refreshQueueCounts();
 
       const mb = (blob.size / 1048576).toFixed(1);
@@ -2884,6 +3186,8 @@
     } else {
       els['view-cover'].classList.add('active');
       updatePendingBanner();
+      resetDiscardButton();
+      refreshArchiveCount();
     }
   }
 
@@ -3494,6 +3798,9 @@
     'back-to-cover': () => navigateTo('cover'),
     'retry-uploads': retryFailedUploads,
     'save-pending-local': savePendingPhotosLocally,
+    'discard-pending': discardPendingUploads,
+    'cancel-uploads': cancelUploads,
+    'save-archive': exportArchive,
     'toggle-fullscreen': toggleFullscreen,
     'dismiss-ios-hint': dismissIosFullscreenHint,
     'dismiss-rotate-hint': dismissRotateHint,
@@ -3613,6 +3920,14 @@
 
     // 受付状況の確認。起動を待たせないので await しません
     refreshUploadStatus();
+
+    /* 端末の控えが勝手に消されにくくなるよう、永続化を申請します。
+       断られても動作に支障はありません。 */
+    try {
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+    } catch (error) { /* noop */ }
+
+    refreshArchiveCount();
 
     if (!CONFIG.API_URL || CONFIG.API_URL.indexOf('/exec') === -1) {
       toast('API の URL が設定されていません。管理者にお知らせください。', 'error', 9000);
