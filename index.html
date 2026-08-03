@@ -1065,6 +1065,10 @@
        端末を横にしても縦長の写真になる機種がありました。 */
     CAPTURE_MODE: 'orientation',
 
+    /* 回転補正の向き。もし補正後の写真が「逆向きに」倒れていたら、
+       ここを -1 にすれば反転します（端末による差を吸収するための逃げ道）。 */
+    ROTATION_SIGN: 1,
+
     /** 連写の下限間隔。同じフレームが何枚も積まれるのを防ぎます */
     SHUTTER_COOLDOWN_MS: 700,
 
@@ -1160,6 +1164,8 @@
 
     /** 傾きセンサーで判定した端末の向き。null は「まだ分からない」 */
     physicalLandscape: null,
+    /** 横に倒した向き（+1 / -1）。回転補正の向きに使います */
+    tiltSign: 1,
     orientationSensorOn: false,
 
     /** 'photo' | 'video' */
@@ -2279,6 +2285,37 @@
     // ほぼ水平に寝かせているときは判定できないので、前の値を保ちます
     if (Math.abs(g - b) < 15) return;
     state.physicalLandscape = g > b;
+    // どちら回りに倒したか。回転補正の向きに使います
+    if (state.physicalLandscape) state.tiltSign = gamma >= 0 ? 1 : -1;
+  }
+
+  /** 画面（OS）が横向きになっているか。傾きセンサーは見ません */
+  function screenIsLandscape() {
+    try {
+      const angle = screen.orientation && screen.orientation.angle;
+      if (typeof angle === 'number') return angle === 90 || angle === 270;
+    } catch (error) { /* 下のフォールバックへ */ }
+    if (typeof window.orientation === 'number') return Math.abs(window.orientation) === 90;
+    return window.innerWidth > window.innerHeight;
+  }
+
+  /**
+   * 保存時に必要な回転角（度）。
+   *
+   * 「画面の自動回転」がオフの状態で端末を横に倒すと、画面の中身も一緒に
+   * 物理的に回るため、カメラ映像の回転と打ち消し合って**プレビューは正しく
+   * 見えます**。ところが保存されるピクセルは画面座標系のままなので、
+   * あとからアルバムで見ると 90 度倒れます。
+   *
+   * 画面の向きと端末の実際の向きが食い違っているときだけ、その差を戻します。
+   * 自動回転がオンなら両者は一致するので 0（＝何もしない）です。
+   */
+  function captureRotation() {
+    if (state.physicalLandscape === null) return 0;      // 傾きが分からない
+    if (state.physicalLandscape === screenIsLandscape()) return 0; // 一致＝補正不要
+    return state.physicalLandscape
+      ? (state.tiltSign >= 0 ? 90 : -90) * CONFIG.ROTATION_SIGN
+      : 0;
   }
 
   /** iOS 13 以降は明示的な許可が必要です */
@@ -2354,12 +2391,13 @@
     ctx.imageSmoothingQuality = 'high';
 
     if (CONFIG.CAPTURE_MODE === 'orientation') {
-      /* 端末の向きに合わせて 3:4（縦）/ 4:3（横）に中央切り出しします。
-         カメラが返すフレームの向きは端末依存で、iOS は端末を回すと
-         videoWidth/Height が入れ替わりますが、Android では横のままの機種があります。
-         「フレームがどちら向きか」ではなく「端末がどちら向きか」を基準に
-         切り出すことで、どちらの挙動の端末でも持った向きどおりに保存されます。 */
-      const targetRatio = isLandscape() ? (4 / 3) : (3 / 4);
+      /* 切り出しは「画面に見えている向き」に合わせます。プレビューは常に
+         正しく見えているので、それをそのまま切り取るのが一番ずれません。
+         そのうえで、画面の向きと端末の実際の向きが食い違っている場合
+         （自動回転オフで横に構えたとき）だけ、最後に回転して世界基準で
+         正しい向きに直します。 */
+      const rotation = captureRotation();
+      const targetRatio = screenIsLandscape() ? (4 / 3) : (3 / 4);
 
       let srcW = vw;
       let srcH = vh;
@@ -2370,9 +2408,22 @@
       const sy = Math.round((vh - srcH) / 2);
 
       const scale = Math.min(1, CONFIG.MAX_DIM / Math.max(srcW, srcH));
-      canvas.width = Math.max(1, Math.round(srcW * scale));
-      canvas.height = Math.max(1, Math.round(srcH * scale));
-      ctx.drawImage(video, sx, sy, srcW, srcH, 0, 0, canvas.width, canvas.height);
+      const outW = Math.max(1, Math.round(srcW * scale));
+      const outH = Math.max(1, Math.round(srcH * scale));
+
+      if (rotation === 0) {
+        canvas.width = outW;
+        canvas.height = outH;
+        ctx.drawImage(video, sx, sy, srcW, srcH, 0, 0, outW, outH);
+      } else {
+        // 90 度回すので、出力の縦横は入れ替わります
+        canvas.width = outH;
+        canvas.height = outW;
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate(rotation * Math.PI / 180);
+        ctx.drawImage(video, sx, sy, srcW, srcH, -outW / 2, -outH / 2, outW, outH);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+      }
     } else if (CONFIG.CAPTURE_MODE === 'preview') {
       // 画面に見えている範囲だけを切り出します（object-fit: cover と同じ計算）
       const rect = video.getBoundingClientRect();
