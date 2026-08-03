@@ -145,6 +145,13 @@
     .btn-mode-archive:active { transform: scale(0.96); }
     .btn-mode-archive[hidden] { display: none; }
 
+    .autosave-toggle {
+      background: transparent; border: none; color: #6b6b6b; font-size: 11px;
+      margin-top: 14px; cursor: pointer; text-decoration: underline;
+      padding: 4px;
+    }
+    .autosave-toggle[hidden] { display: none; }
+
     /* 未送信の写真がある場合の通知 */
     .pending-banner {
       display: none; width: 100%; max-width: 380px; margin-top: 16px;
@@ -784,6 +791,10 @@
                 data-action="save-archive" hidden></button>
       </div>
 
+      <!-- 撮るたびに端末へ落とすかの切り替え。ダウンロード通知が多いと感じたら切れます -->
+      <button class="autosave-toggle" id="btnAutoSaveToggle" data-action="toggle-autosave"
+              aria-pressed="true"></button>
+
       <!-- 端末のカメラロールから選ぶための入力。ボタンから click() します -->
       <input type="file" id="filePicker" accept="image/*,video/*" multiple hidden>
 
@@ -1084,6 +1095,8 @@
     STORAGE_KEY_NAME: 'wedding_guest_name',
     STORAGE_KEY_IOS_HINT: 'wedding_ios_fs_hint',
     STORAGE_KEY_ROTATE_HINT: 'wedding_rotate_hint',
+    /** 撮影のたびに端末へダウンロードするか（'off' で無効） */
+    STORAGE_KEY_AUTOSAVE: 'wedding_autosave',
 
     /** 1 回のアップロードで選べる枚数の上限。端末のメモリを守るため */
     PICK_MAX: 30,
@@ -1176,7 +1189,7 @@
     'inappWarning', 'inappHintIos', 'inappHintAndroid', 'inappHintGeneric',
     'flashEffect', 'queueBadge', 'queueBadgeText', 'queueSpinner',
     'displayUserName', 'pendingBanner', 'pendingBannerText', 'btnSavePendingLocal',
-    'btnDiscardPending', 'btnCancelUpload', 'btnSaveArchive',
+    'btnDiscardPending', 'btnCancelUpload', 'btnSaveArchive', 'btnAutoSaveToggle',
     'view-cover', 'view-camera', 'view-album',
     'cameraVideo', 'cameraPlaceholder', 'cameraPlaceholderText', 'btnRetryCamera',
     'switchCamBtn', 'shutterBtn', 'controlSpacer', 'status', 'recentShots',
@@ -1620,6 +1633,39 @@
     };
   })();
 
+  /* 撮影のたびに端末へダウンロードするか。既定はオン。
+     iOS は自動ダウンロードがブラウザ側で塞がれているため対象外です。 */
+  const isAutoSaveOn = () => Storage.get(CONFIG.STORAGE_KEY_AUTOSAVE) !== 'off';
+  const canAutoDownload = () => !isIos();
+
+  function stampedFileName(kind, blob) {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    const stamp = d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate())
+      + '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+    const ext = kind === 'video' ? extensionForMime(blob.type) : '.jpg';
+    return 'wedding_' + stamp + ext;
+  }
+
+  /**
+   * 撮った直後に端末へ保存します。
+   *
+   * Android / PC は <a download> がそのまま通るので、撮影のたびに自動で
+   * 端末へ落とします。iOS Safari は「ユーザー操作を伴わないダウンロード」を
+   * 塞いでいるため自動では落とせません。その場合は控え（archive）に貯めて、
+   * 表紙のボタンからまとめて取り出してもらいます。
+   */
+  function autoSaveToDevice(blob, kind) {
+    if (!isAutoSaveOn() || !canAutoDownload()) return false;
+    try {
+      downloadBlob(blob, stampedFileName(kind, blob));
+      return true;
+    } catch (error) {
+      console.warn('[autosave] 端末に保存できませんでした', error);
+      return false;
+    }
+  }
+
   /**
    * 撮ったものを端末側に控えます。送信とは独立して動きます。
    * 容量が上限を超えたら古いものから捨てます（端末の空きを食い潰さないため）。
@@ -1662,6 +1708,24 @@
     const count = state.archiveCount;
     els.btnSaveArchive.hidden = count === 0;
     els.btnSaveArchive.textContent = '📥 この端末で撮った ' + count + ' 件を保存';
+
+    /* iOS は自動ダウンロードができないので切り替えを出しません
+       （切り替えても何も変わらないボタンは置かない） */
+    els.btnAutoSaveToggle.hidden = !canAutoDownload();
+    const on = isAutoSaveOn();
+    els.btnAutoSaveToggle.textContent = on
+      ? '✓ 撮るたびに端末へ保存する（タップでオフ）'
+      : '撮るたびに端末へ保存する：オフ（タップでオン）';
+    els.btnAutoSaveToggle.setAttribute('aria-pressed', String(on));
+  }
+
+  function toggleAutoSave() {
+    const next = isAutoSaveOn() ? 'off' : 'on';
+    Storage.set(CONFIG.STORAGE_KEY_AUTOSAVE, next);
+    updateArchiveUI();
+    toast(next === 'off'
+      ? '撮るたびの端末保存をオフにしました。控えは残るので、あとからまとめて保存できます。'
+      : '撮るたびに端末へ保存します。', null, 6000);
   }
 
   /**
@@ -2460,6 +2524,7 @@
       addRecentShot(queueKey, blob);
       // 送信の成否とは別に、端末側へ必ず控えを残します
       archiveCapture(blob, 'photo');
+      autoSaveToDevice(blob, 'photo');
 
       await refreshQueueCounts();
 
@@ -2824,6 +2889,7 @@
       addRecentShot(queueKey, blob, true);
       // 送信の成否とは別に、端末側へ必ず控えを残します
       archiveCapture(blob, 'video');
+      autoSaveToDevice(blob, 'video');
       await refreshQueueCounts();
 
       const mb = (blob.size / 1048576).toFixed(1);
@@ -3801,6 +3867,7 @@
     'discard-pending': discardPendingUploads,
     'cancel-uploads': cancelUploads,
     'save-archive': exportArchive,
+    'toggle-autosave': toggleAutoSave,
     'toggle-fullscreen': toggleFullscreen,
     'dismiss-ios-hint': dismissIosFullscreenHint,
     'dismiss-rotate-hint': dismissRotateHint,
