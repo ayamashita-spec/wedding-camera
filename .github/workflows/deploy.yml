@@ -35,6 +35,8 @@ jobs:
           API_URL: ${{ secrets.WEDCAM_API_URL }}
           API_TOKEN: ${{ secrets.WEDCAM_API_TOKEN }}
           DRIVE_FOLDER_URL: ${{ secrets.WEDCAM_DRIVE_FOLDER_URL }}
+          # トークン無しで運用する場合だけ、リポジトリ変数に ALLOW_NO_TOKEN=1 を入れます
+          ALLOW_NO_TOKEN: ${{ vars.ALLOW_NO_TOKEN }}
         run: |
           node -e '
             const fs = require("fs");
@@ -49,6 +51,12 @@ jobs:
             }
             if (!/^https:\/\/script\.google\.com\/.*\/exec$/.test(cfg.API_URL)) {
               console.error("::error::WEDCAM_API_URL が GAS の /exec URL ではありません: " + cfg.API_URL);
+              process.exit(1);
+            }
+            // トークンが空のまま配信すると、GAS 側にトークンが設定されている場合に
+            // 全ゲストが送信できなくなります。しかも画面は正常に見えるので気づけません。
+            if (!cfg.API_TOKEN && process.env.ALLOW_NO_TOKEN !== "1") {
+              console.error("::error::WEDCAM_API_TOKEN が未設定です。GAS 側に API_TOKEN を設定している場合、この状態で配信するとゲスト全員が送信できず、アプリは原因を「電波のせい」と案内します。意図的にトークン無しで運用する場合のみ、リポジトリ変数 ALLOW_NO_TOKEN=1 を設定してください。");
               process.exit(1);
             }
             fs.writeFileSync("config.js",

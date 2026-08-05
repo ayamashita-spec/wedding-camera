@@ -14,6 +14,12 @@
   <meta name="apple-mobile-web-app-title" content="WedCam">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#faf8f5">
+
+  <!-- ゲストの顔写真が集まるページなので、検索結果には出さないようにします。
+       GitHub Pages はレスポンスヘッダを設定できないため meta で指定します。 -->
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+
   <link rel="manifest" href="./manifest.json">
 
   <!-- iOS は manifest のアイコンを読まないため個別指定が必要です -->
@@ -66,6 +72,26 @@
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
+
+    /* ── タップ領域の確保 ──────────────────────────────────
+       小さな操作要素の当たり判定だけを 44px に広げます（見た目は変えません）。
+       送信停止の ✕ は 18px、ヒントの × は約 20x24px、テキストリンクは高さ
+       約 18px しかなく、高齢のゲストが押し損ねます。 */
+    .queue-stop, .hint-close, .btn-icon-round, .edit-name-btn,
+    .autosave-toggle, .btn-sub-action, .btn-text-link { position: relative; }
+    .queue-stop::after, .hint-close::after, .btn-icon-round::after,
+    .edit-name-btn::after, .autosave-toggle::after, .btn-sub-action::after,
+    .btn-text-link::after {
+      content: ''; position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: max(100%, 44px); height: max(100%, 44px);
+    }
+    /* 写真/動画は隣接する 2 ボタンなので、横に広げると互いに重なります。縦だけ広げます */
+    .mode-switch button { position: relative; }
+    .mode-switch button::after {
+      content: ''; position: absolute; left: 0; top: 50%;
+      transform: translateY(-50%); width: 100%; height: max(100%, 44px);
     }
 
     .glass-panel {
@@ -212,8 +238,10 @@
       -webkit-tap-highlight-color: transparent;
     }
     .camera-chip svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
-    #btnCameraBack { left: 12px; }
-    #btnFullscreenToggle { right: 12px; }
+    /* 横向きにすると左右にノッチが来ます。safe-area-inset-left/right を足さないと
+       「◀ モード選択」や全画面ボタンがセンサーハウジングの陰に入ります。 */
+    #btnCameraBack { left: calc(12px + env(safe-area-inset-left)); }
+    #btnFullscreenToggle { right: calc(12px + env(safe-area-inset-right)); }
     #btnFullscreenToggle[hidden] { display: none; }
 
     .camera-controls-overlay {
@@ -288,7 +316,11 @@
     }
     .modal-video-wrap {
       position: relative; width: 100%; background: #000;
-      aspect-ratio: 16 / 9;
+      /* Drive のプレイヤーは、渡した枠の中で動画をレターボックス表示します。
+         16:9 固定だと、スマホで縦に構えて撮った動画（9:16）が枠のごく一部にしか
+         映りません。縦横どちらでも大きく映る 3:4 を既定にします。 */
+      aspect-ratio: 3 / 4;
+      max-height: 70dvh;
     }
     .modal-video-wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
     .shutter-icon { font-size: 30px; line-height: 1; }
@@ -356,11 +388,20 @@
 
     @media (orientation: landscape) {
       .camera-controls-overlay {
-        top: 0; bottom: 0; left: auto; right: 0; width: 95px;
-        padding: calc(10px + env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom)) 10px;
+        top: 0; bottom: 0; left: auto; right: 0;
+        /* ノッチが右に来る向きでは、シャッターがセンサーハウジングの陰に入ります。
+           95px だと写真/動画スイッチ（約 76px + padding 20px）が収まらないため、
+           あわせて少し広げます。 */
+        width: calc(104px + env(safe-area-inset-right));
+        padding: calc(10px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right))
+                 calc(10px + env(safe-area-inset-bottom)) 10px;
         background: linear-gradient(to left, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
         justify-content: center;
       }
+      /* 縦カラム幅に収まらず、ラベルが 1 文字ずつ縦に折れていました。
+         nowrap は「万一狭くても縦書きにはしない」ための保険です。 */
+      .mode-switch { padding: 2px; }
+      .mode-switch button { padding: 4px 7px; font-size: 10px; white-space: nowrap; }
       .camera-controls { flex-direction: column; gap: 16px; width: auto; }
       .shutter-btn-visual { width: 64px; height: 64px; border-width: 3px; }
       .shutter-icon { font-size: 24px; }
@@ -377,7 +418,11 @@
        複数出ても重ならないよう 1 つの縦積みコンテナにまとめます。 */
     .camera-hints {
       position: absolute; z-index: 24;
-      left: 12px; right: 12px; bottom: calc(120px + env(safe-area-inset-bottom));
+      left: 12px; right: 12px;
+      /* コントロール群の実高を JS が --controls-h に流します。固定値（旧 120px）だと
+         写真/動画スイッチと直近サムネイルの帯を丸ごと覆ってしまい、しかも
+         .camera-hint は pointer-events: auto なのでタップも通りませんでした。 */
+      bottom: calc(var(--controls-h, 230px) + 12px);
       display: flex; flex-direction: column; gap: 8px; pointer-events: none;
     }
     .camera-hint {
@@ -401,7 +446,12 @@
       font-size: 11px; font-weight: 700; cursor: pointer;
     }
     @media (orientation: landscape) {
-      .camera-hints { right: 105px; bottom: calc(10px + env(safe-area-inset-bottom)); }
+      /* 横向きは overlay が画面右の縦帯になるので、--controls-h は使いません */
+      .camera-hints {
+        right: calc(114px + env(safe-area-inset-right));
+        left: calc(12px + env(safe-area-inset-left));
+        bottom: calc(10px + env(safe-area-inset-bottom));
+      }
     }
 
     #flashEffect {
@@ -512,7 +562,11 @@
       -webkit-tap-highlight-color: transparent;
     }
     .grid-item img {
-      width: 100%; height: 100%; object-fit: cover; display: block;
+      width: 100%; height: 100%; display: block;
+      /* cover（正方形に切り抜き）だと、横向きの写真は左右 25%、縦向きは上下 25% が
+         見えません。「撮った写真が切れている」と受け取られるので contain にします。
+         タイルは正方形のまま、余った所は .grid-item の背景色が出ます。 */
+      object-fit: contain;
       transition: opacity 0.2s, transform 0.2s;
     }
     .grid-item:active img { opacity: 0.8; }
@@ -590,7 +644,11 @@
       width: 100%; min-height: 200px; background: #faf9f7;
       display: flex; align-items: center; justify-content: center;
     }
-    .modal-img-container img { width: 100%; max-height: 60vh; object-fit: contain; display: block; }
+    /* display を指定したクラスはブラウザ標準の [hidden] { display: none } に勝ちます。
+       これが無いと動画を開いたときに els.modalImgWrap.hidden = true が効かず、
+       高さ 200px の空っぽの箱が動画の上に残り続けます（.sheet-option と同じ罠）。 */
+    .modal-img-container[hidden], .modal-video-wrap[hidden] { display: none; }
+    .modal-img-container img { width: 100%; max-height: 60dvh; object-fit: contain; display: block; }
     .modal-actions { padding: 12px 16px; display: flex; justify-content: flex-end; align-items: center; }
 
     /* 受付終了の案内 */
@@ -677,6 +735,9 @@
       width: 100%; max-width: 480px; background: #fff;
       border-radius: 20px 20px 0 0; padding: 22px 20px calc(22px + env(safe-area-inset-bottom));
       animation: slideUp 0.25s ease-out;
+      /* 親は flex-end で下寄せなので、内容がビューポートより高いとはみ出しは上方向に
+         出て到達できなくなります（横向きや文字拡大時）。枠内でスクロールさせます。 */
+      max-height: calc(100dvh - 24px); overflow-y: auto;
     }
     @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
     .sheet h2 { font-size: 15px; margin: 0 0 4px; color: #333; }
@@ -696,6 +757,15 @@
     .sheet-option .sheet-option-desc { font-size: 11px; color: #8a8a8a; line-height: 1.5; font-weight: 400; }
 
     /* ── トースト（全画面表示中でも消えない通知） ───────── */
+    /* カメラ画面ではトーストを上へ退避させます。下に出すと 80px のシャッターに
+       9 秒間重なって、初見のゲストが押す場所を見失います（pointer-events: none
+       なので操作は塞ぎませんが、見えないのは同じくらい困ります）。
+       上部のチップ（12px+safe / 高さ約 30px）と同期バッジを避けた位置です。 */
+    body.is-camera .toast-stack {
+      bottom: auto;
+      top: calc(56px + env(safe-area-inset-top));
+    }
+
     .toast-stack {
       position: fixed; left: 50%; transform: translateX(-50%);
       bottom: calc(24px + env(safe-area-inset-bottom));
@@ -803,7 +873,7 @@
     <!-- 未送信写真の通知 -->
     <div class="pending-banner" id="pendingBanner">
       <div id="pendingBannerText"></div>
-      <button data-action="retry-uploads">今すぐ送信する</button>
+      <button data-action="retry-uploads" id="btnRetryUploads">今すぐ送信する</button>
       <button data-action="save-pending-local" id="btnSavePendingLocal" class="is-secondary">
         端末に保存する
       </button>
@@ -951,7 +1021,7 @@
   </div>
 
   <!-- ══ 名前登録モーダル ══════════════════════════════ -->
-  <div id="nameModal" class="modal">
+  <div id="nameModal" class="modal" data-close-on-backdrop>
     <div class="modal-content-wrapper glass-panel" style="padding: 34px 24px; background: #fff;">
       <div style="font-size: 36px; line-height: 1;" aria-hidden="true">💌</div>
       <h2 style="font-family: 'Cormorant Garamond', serif; font-size: 24px; color: var(--wedding-gold); margin: 6px 0 18px;">
@@ -968,9 +1038,16 @@
              placeholder="例：新郎の友人 たろう" autocomplete="off" enterkeyhint="done">
       <div class="name-input-hint" id="nameInputHint">20 文字まで</div>
 
+      <!-- 同意を取る画面はここだけなので、実態を書きます。
+           「URL を知っている人全員」だけだと招待客の輪の中と読まれますが、
+           実際はアルバムのフォルダをリンク共有しているため、URL が外に出れば
+           誰でも原本まで見られます。端末への自動保存にも触れておきます。 -->
       <p class="privacy-note">
-        お名前と写真は、このアプリの URL を知っている人全員に表示されます。
-        本名を出したくない場合はニックネームでも大丈夫です。
+        お名前と写真は共有アルバム（Google ドライブ）に保存され、<b>このページの URL を
+        開いた人全員</b>が見られます。URL がインターネット上に出た場合、招待客以外の目に
+        触れることがあります。本名を出したくない場合はニックネームで大丈夫です。<br>
+        <!-- 端末への控えの説明は iPhone と Android で実態が違うため、init() で入れます -->
+        <span id="privacyAutoSave"></span>
       </p>
 
       <button data-action="save-name" class="name-submit-btn">設定して次へ</button>
@@ -1057,12 +1134,19 @@
     JPEG_QUALITY: 0.80,
 
     /* --- 撮影範囲 ---------------------------------------------------------
-       'orientation' : 端末の向きに合わせて 3:4（縦持ち）/ 4:3（横持ち）で切り出す
-       'native'      : カメラのフレーム全体を保存（歪みなし・情報量が最大）
+       'orientation' : プレビューで見えていた範囲を必ず含めたうえで、向き
+                       （縦 3:4 / 横 4:3）へ「広げる方向にだけ」寄せて切り出す
+       'native'      : カメラのフレーム全体を保存（ただし向きの補正をしません）
        'preview'     : 画面に見えている範囲だけを切り出す（9:19.5 の細長い写真になる）
 
        既定は 'orientation'。'native' だとカメラのフレーム向きがそのまま出るため、
-       端末を横にしても縦長の写真になる機種がありました。 */
+       端末を横にしても縦長の写真になる機種がありました。
+
+       'orientation' は以前「目標比でフレームを切る」実装で、プレビューに見えて
+       いた範囲より狭くなっていました（1920x1080 のフレームを横持ちで撮ると
+       幅 1920 → 1440 に切られ、見えていた両端が消えていた）。見えていたものは
+       切らない方針に変えたため、フレーム比によっては 3:4 / 4:3 にならず、
+       16:9 のまま保存されることがあります。 */
     CAPTURE_MODE: 'orientation',
 
     /* 回転補正の向き。もし補正後の写真が「逆向きに」倒れていたら、
@@ -1096,11 +1180,21 @@
     SHARE_MAX: 20,
 
     JSZIP_URL: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+
+    /* 上の CDN の改ざん検知。cdnjs のページに出ている 3.10.1 の sha384 / sha512 を
+       そのまま貼ってください（例 'sha512-…'）。空なら検証しません。
+       値を間違えるとブラウザが読み込みを拒否し、ZIP 保存だけが壊れます。
+       必ず実機で「ZIP でまとめて保存」を 1 回通してから本番に入れてください。
+       なお jszip.min.js（約 100KB）をリポジトリに同梱して './vendor/jszip.min.js'
+       を指すようにすれば、SRI も CDN の到達性も気にしなくて済みます。 */
+    JSZIP_SRI: '',
     STORAGE_KEY_NAME: 'wedding_guest_name',
     STORAGE_KEY_IOS_HINT: 'wedding_ios_fs_hint',
     STORAGE_KEY_ROTATE_HINT: 'wedding_rotate_hint',
     /** 撮影のたびに端末へダウンロードするか（'off' で無効） */
     STORAGE_KEY_AUTOSAVE: 'wedding_autosave',
+    /** 端末への自動保存を 1 度だけ知らせたか */
+    STORAGE_KEY_AUTOSAVE_HINT: 'wedding_autosave_hint',
 
     /** 1 回のアップロードで選べる枚数の上限。端末のメモリを守るため */
     PICK_MAX: 30,
@@ -1117,8 +1211,11 @@
     VIDEO_MAX_SEC: 15,
     VIDEO_BITS_PER_SEC: 1500000,
     VIDEO_AUDIO_BITS_PER_SEC: 64000,
-    /** 録画の解像度の希望値。実際に何が返るかは端末次第です */
-    VIDEO_IDEAL_HEIGHT: 720,
+    /* 撮影ストリームの解像度の希望値（実際に何が返るかは端末次第）。
+       写真と動画で必ず同じ値を使います。以前は録画側だけ 1280x720 で取り直しており、
+       動画を 1 本撮ると以降その端末の写真だけ解像度が半分以下になっていました。 */
+    CAPTURE_IDEAL_WIDTH: 1920,
+    CAPTURE_IDEAL_HEIGHT: 1080,
     /** 送信前の安全弁。これを超えたら送らずに知らせます */
     VIDEO_MAX_BYTES: 25 * 1024 * 1024,
     /** 動画は重いので専用のタイムアウトにします */
@@ -1132,6 +1229,9 @@
     albumImages: [],
     selectedIds: new Set(),
     nextPageToken: null,
+    /** サーバーが全件フォールバックに落ちた／件数を打ち切った場合の申告 */
+    albumDegraded: false,
+    albumTruncated: false,
     isSelectMode: false,
     isAlbumLoading: false,
     /** すでにグリッドに描画済みの枚数。差分描画の基点 */
@@ -1145,6 +1245,10 @@
 
     pendingCount: 0,
     failedCount: 0,
+    /** 件数の読み取りに失敗している状態。0 件と区別して表示するため */
+    queueCountsUnknown: false,
+    /** 送信が止まったまま未送信が残っている状態。「送信中」と嘘をつかないため */
+    queuePaused: false,
     isQueueRunning: false,
 
     pendingNavigation: null,
@@ -1185,8 +1289,9 @@
     /** 送信の停止要求。processQueue のループが見ます */
     cancelQueue: false,
 
-    /** 端末側に控えてある件数と、share() 直前まで持つファイル */
+    /** 端末側に控えてある件数・合計バイト数と、share() 直前まで持つファイル */
     archiveCount: 0,
+    archiveBytes: 0,
     archiveFiles: null
   };
 
@@ -1194,7 +1299,8 @@
   const ELEMENT_IDS = [
     'inappWarning', 'inappHintIos', 'inappHintAndroid', 'inappHintGeneric',
     'flashEffect', 'queueBadge', 'queueBadgeText', 'queueSpinner',
-    'displayUserName', 'pendingBanner', 'pendingBannerText', 'btnSavePendingLocal',
+    'displayUserName', 'pendingBanner', 'pendingBannerText', 'btnSavePendingLocal', 'btnRetryUploads',
+    'privacyAutoSave',
     'btnDiscardPending', 'btnCancelUpload', 'btnSaveArchive', 'btnAutoSaveToggle',
     'view-cover', 'view-camera', 'view-album',
     'cameraVideo', 'cameraPlaceholder', 'cameraPlaceholderText', 'btnRetryCamera',
@@ -1413,6 +1519,10 @@
         error.isServerError = true;
         // 受付終了。何度送っても通らないので、リトライさせません
         if (json.closed) error.uploadClosed = true;
+        /* サーバーが「これは何度送っても通らない」と明示した場合
+           （サイズ超過・形式不正など）。GAS 側のパッチ A で返ってくるようになります。
+           未適用のうちは undefined のままで、従来どおり通常のリトライに落ちます。 */
+        if (json.permanent) error.permanent = true;
         throw error;
       }
       return json;
@@ -1492,10 +1602,21 @@
     let dbPromise = null;
     let available = true;
 
+    /* 開くのに時間がかかりすぎたら諦めます。他のタブが古いバージョンを握っていると
+       open は blocked のまま無期限に待ち、await Queue.add(...) が返らなくなって
+       シャッターが disabled のまま固まります（finally が走らないため）。 */
+    const OPEN_TIMEOUT_MS = 8000;
+
     function openDb() {
       if (dbPromise) return dbPromise;
       dbPromise = new Promise((resolve, reject) => {
         if (!window.indexedDB) { reject(new Error('no_indexeddb')); return; }
+
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (!settled) { settled = true; reject(new Error('idb_open_timeout')); }
+        }, OPEN_TIMEOUT_MS);
+
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         request.onupgradeneeded = () => {
           const db = request.result;
@@ -1507,8 +1628,31 @@
             db.createObjectStore(STORE_ARCHIVE, { keyPath: 'id', autoIncrement: true });
           }
         };
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        request.onblocked = () => {
+          console.warn('[queue] IndexedDB が他のタブに握られています');
+        };
+        request.onsuccess = () => {
+          clearTimeout(timer);
+          const db = request.result;
+          if (settled) { try { db.close(); } catch (error) { /* noop */ } return; }
+          settled = true;
+
+          /* 接続が閉じられたらハンドルを捨て、次のアクセスで開き直します。
+             旧版は dbPromise を永久にキャッシュしていたため、いったん閉じられると
+             以後すべての transaction() が InvalidStateError を投げ続けました。
+             available は落とさないので、開き直せれば普通に復帰します。 */
+          db.onclose = () => { dbPromise = null; };
+          db.onversionchange = () => {
+            try { db.close(); } catch (error) { /* noop */ }
+            dbPromise = null;
+          };
+
+          resolve(db);
+        };
+        request.onerror = () => {
+          clearTimeout(timer);
+          if (!settled) { settled = true; reject(request.error); }
+        };
       }).catch((error) => {
         available = false;
         dbPromise = null;
@@ -1527,9 +1671,12 @@
       }));
     }
 
-    /** IndexedDB が使えない環境向けのメモリ退避 */
+    /* IndexedDB が使えない環境向けのメモリ退避。
+       id は IndexedDB の autoIncrement キー（1 から）と衝突しない値から始めます。
+       衝突すると、processQueue の handled Set が別の写真を「処理済み」と誤認し、
+       markRecentShot の [data-key] 照合も別のサムネイルに ✓ を付けます。 */
     const memoryQueue = [];
-    let memoryId = 1;
+    let memoryId = 1e9;
 
     return {
       isPersistent: () => available,
@@ -1546,6 +1693,16 @@
         try {
           return await run('readwrite', (store) => store.add(item));
         } catch (error) {
+          /* 空き容量が尽きた場合（QuotaExceededError）が本命です。控えが最大 300MB
+             同居しているため、空きの少ない端末では普通に起きます。
+             メモリ退避に落ちると、以降の写真はタブを閉じた時点で消えます。
+             まず控えを削って空きを作り、1 回だけやり直します。 */
+          try {
+            await pruneArchiveTo(CONFIG.ARCHIVE_MAX_BYTES * 0.5);
+            return await run('readwrite', (store) => store.add(item));
+          } catch (retryError) {
+            console.warn('[queue] IndexedDB に書けません。メモリ退避に切り替えます', retryError);
+          }
           available = false;
           const id = memoryId++;
           memoryQueue.push(Object.assign({ id: id }, item));
@@ -1553,24 +1710,30 @@
         }
       },
 
+      /* 読み取りは失敗を隠しません。
+         旧版は catch で memoryQueue を返していましたが、IndexedDB が生きている
+         あいだ memoryQueue は常に空なので、getAll が 1 回失敗するだけで
+         「未送信 0 件」に化けていました。バッジもバナーも消えて「全部送信済み」に
+         見え、beforeunload も鳴らないため、ゲストは安心してタブを閉じます。
+         写真は IndexedDB に残っているのに Drive には 1 枚も上がりません。
+
+         呼び出し側が「空だった」と「読めなかった」を区別できるよう、例外は
+         そのまま投げます。件数を 0 に倒してよい場面はどこにもありません。 */
       async all() {
         if (!available) return memoryQueue.slice();
-        try { return (await run('readonly', (store) => store.getAll())) || []; }
-        catch (error) { return memoryQueue.slice(); }
+        return (await run('readonly', (store) => store.getAll())) || [];
       },
 
       /* 旧版の processQueue は 1 枚処理するごとに getAll() で全件を読み直しており、
          枚数の 2 乗のコストがかかっていました。キーだけ取って 1 件ずつ引きます。 */
       async allKeys() {
         if (!available) return memoryQueue.map((item) => item.id);
-        try { return (await run('readonly', (store) => store.getAllKeys())) || []; }
-        catch (error) { return memoryQueue.map((item) => item.id); }
+        return (await run('readonly', (store) => store.getAllKeys())) || [];
       },
 
       async get(id) {
         if (!available) return memoryQueue.find((item) => item.id === id) || null;
-        try { return (await run('readonly', (store) => store.get(id))) || null; }
-        catch (error) { return memoryQueue.find((item) => item.id === id) || null; }
+        return (await run('readonly', (store) => store.get(id))) || null;
       },
 
       async remove(id) {
@@ -1604,7 +1767,12 @@
    * ======================================================================== */
   const Archive = (() => {
     const STORE = STORE_ARCHIVE;
-    let available = true;
+
+    /* 「書けない」と「読めない」は分けます。旧版は 1 回の書き込み失敗で
+       available を落とし、keys() が空配列を返すようになっていました。その結果
+       表紙の「この端末で撮った ○ 件を保存」ボタンごと消え、既に控えてあるものを
+       取り出す手段が無くなっていました（控えは残っているのに救出できない）。 */
+    let writable = true;
 
     function run(mode, work) {
       return Queue.openDb().then((db) => new Promise((resolve, reject) => {
@@ -1617,23 +1785,32 @@
     }
 
     return {
+      isWritable: () => writable,
+
       async add(item) {
-        if (!available) return null;
+        if (!writable) return null;
         try { return await run('readwrite', (store) => store.add(item)); }
-        catch (error) { available = false; console.warn('[archive] 保存できません', error); return null; }
+        catch (error) {
+          // 空き容量が本命。古い控えを削って 1 回だけやり直します
+          try {
+            await pruneArchiveTo(CONFIG.ARCHIVE_MAX_BYTES * 0.5);
+            return await run('readwrite', (store) => store.add(item));
+          } catch (retryError) {
+            writable = false;
+            console.warn('[archive] 保存できません', retryError);
+            return null;
+          }
+        }
       },
+
+      /* 読み取りは writable と切り離します（書けなくても取り出せるように）。
+         そして Queue 側と同じ理由で、失敗を空配列に潰しません。潰すと
+         archiveCount が 0 になり、表紙の「この端末で撮った ○ 件を保存」ボタンが
+         消えて、控えを救出する手段そのものが無くなります。 */
       async all() {
-        if (!available) return [];
-        try { return (await run('readonly', (store) => store.getAll())) || []; }
-        catch (error) { return []; }
-      },
-      async keys() {
-        if (!available) return [];
-        try { return (await run('readonly', (store) => store.getAllKeys())) || []; }
-        catch (error) { return []; }
+        return (await run('readonly', (store) => store.getAll())) || [];
       },
       async remove(id) {
-        if (!available) return;
         try { await run('readwrite', (store) => store.delete(id)); } catch (error) { /* noop */ }
       }
     };
@@ -1676,44 +1853,93 @@
    * 撮ったものを端末側に控えます。送信とは独立して動きます。
    * 容量が上限を超えたら古いものから捨てます（端末の空きを食い潰さないため）。
    */
+  /** 控えを残せなくなったことを知らせたか（毎回出すと撮影の邪魔になります） */
+  let archiveFailureNotified = false;
+
   async function archiveCapture(blob, kind) {
     try {
-      await Archive.add({
+      const id = await Archive.add({
         blob: blob,
         kind: kind,
         createdAt: Date.now(),
         userName: getUserName() || 'ゲスト'
       });
+
+      /* 控えは「送信できなかった写真の最後の逃げ道」なので、残せなくなったことは
+         黙って進めてはいけません。ここで伝えないと、ゲストは端末に控えがあると
+         思ったまま撮り続けます。 */
+      if (id === null && !Archive.isWritable() && !archiveFailureNotified) {
+        archiveFailureNotified = true;
+        toast('この端末の空き容量が足りず、撮影データの控えを残せません。'
+          + '写真の送信自体は続きます。', 'error', 9000);
+      }
+
       await pruneArchive();
       await refreshArchiveCount();
+
+      /* 端末への控えの案内は、カメラに入った瞬間ではなく 1 枚撮ったあとに出します。
+         入場時に出すと、9 秒間シャッターに重なって押す場所を見失わせます。 */
+      noticeAutoSaveOnce();
     } catch (error) {
       console.warn('[archive] 控えを残せませんでした', error);
     }
   }
 
-  async function pruneArchive() {
-    const items = await Archive.all();
+  const pruneArchive = () => pruneArchiveTo(CONFIG.ARCHIVE_MAX_BYTES);
+
+  /**
+   * 控えを指定バイト数以下まで、古いものから削ります。
+   *
+   * CONFIG.ARCHIVE_MAX_BYTES はこちらで決めた歯止めで、ブラウザの実際の
+   * 空き容量とは無関係です。そのため書き込みが QuotaExceededError で落ちる
+   * ことがあり、そのときは上限より低い値を渡して空きを作ってから再試行します。
+   */
+  async function pruneArchiveTo(limitBytes) {
+    let items;
+    try {
+      items = await Archive.all();
+    } catch (error) {
+      // 読めないなら削る判断もできません。何もしないのが安全側です
+      console.warn('[archive] 控えを読めないため整理を見送ります', error);
+      return;
+    }
+
     let total = items.reduce((sum, item) => sum + (item.blob ? item.blob.size : 0), 0);
-    if (total <= CONFIG.ARCHIVE_MAX_BYTES) return;
+    if (total <= limitBytes) return;
 
     // 古い順に消します
     items.sort((a, b) => a.createdAt - b.createdAt);
     for (const item of items) {
-      if (total <= CONFIG.ARCHIVE_MAX_BYTES) break;
+      if (total <= limitBytes) break;
       total -= item.blob ? item.blob.size : 0;
       await Archive.remove(item.id);
     }
   }
 
   async function refreshArchiveCount() {
-    state.archiveCount = (await Archive.keys()).length;
+    let items;
+    try {
+      items = await Archive.all();
+    } catch (error) {
+      /* 読めなかった場合は件数を 0 にせず、表示も更新しません。
+         0 にすると控えボタンが消え、控えが残っているのに取り出せなくなります。 */
+      console.error('[archive] 控えの件数を読めませんでした', error);
+      return;
+    }
+
+    state.archiveCount = items.length;
+    state.archiveBytes = items.reduce((sum, item) => sum + (item.blob ? item.blob.size : 0), 0);
     updateArchiveUI();
   }
 
   function updateArchiveUI() {
     const count = state.archiveCount;
     els.btnSaveArchive.hidden = count === 0;
-    els.btnSaveArchive.textContent = '📥 この端末で撮った ' + count + ' 件を保存';
+    /* 容量も出します。控えは最大 300MB まで溜まるので、件数だけだと
+       端末の空きを食っていることが本人に見えません。 */
+    // 0.1MB 未満は「0.0MB」と出て意味を持たないので、そのときは容量を省きます
+    els.btnSaveArchive.textContent = '📥 この端末で撮った ' + count + ' 件'
+      + (state.archiveBytes >= 102400 ? '（' + formatMb(state.archiveBytes) + '）' : '') + 'を保存';
 
     /* iOS は自動ダウンロードができないので切り替えを出しません
        （切り替えても何も変わらないボタンは置かない） */
@@ -1723,6 +1949,34 @@
       ? '✓ 撮るたびに端末へ保存する（タップでオフ）'
       : '撮るたびに端末へ保存する：オフ（タップでオン）';
     els.btnAutoSaveToggle.setAttribute('aria-pressed', String(on));
+  }
+
+  /**
+   * 端末への自動保存を 1 度だけ知らせます。
+   *
+   * 切り替えボタンは表紙にしか無いため、名前を登録してそのままカメラに入った人は
+   * この挙動を知る機会がありません。席でスマホを渡し合うのは普通に起きるので、
+   * 撮った写真が相手のダウンロードフォルダに残ることは伝えておく必要があります。
+   */
+  function noticeAutoSaveOnce() {
+    if (Storage.get(CONFIG.STORAGE_KEY_AUTOSAVE_HINT) === 'shown') return;
+
+    /* 端末で実態が違うので書き分けます。iOS はブラウザが自動ダウンロードを塞いで
+       いるため、撮っても写真アプリには 1 枚も入りません（控えは残ります）。
+       「自動で保存されます」だけ伝えると、写真アプリに入ったと誤解されます。 */
+    let message;
+    if (!canAutoDownload()) {
+      message = '撮った写真は写真アプリには自動で入りません。'
+        + '表紙の「この端末で撮った ○ 件を保存」から取り出せます。';
+    } else if (isAutoSaveOn()) {
+      message = '撮った写真は、この端末にも自動で保存されます。'
+        + '不要なときは表紙の「撮るたびに端末へ保存」からオフにできます。';
+    } else {
+      return; // 自分でオフにした人には何も言いません
+    }
+
+    Storage.set(CONFIG.STORAGE_KEY_AUTOSAVE_HINT, 'shown');
+    toast(message, null, 9000);
   }
 
   function toggleAutoSave() {
@@ -1798,8 +2052,24 @@
    * failed: true の項目は「打ち切り済み」で、自動送信の対象から外れます。
    * 削除はしないので、あとから手動で再送できます。
    */
+  /**
+   * @return {Promise<Array|null>} 読めなかった場合は null（件数は据え置き）
+   */
   async function refreshQueueCounts() {
-    const items = await Queue.all();
+    let items;
+    try {
+      items = await Queue.all();
+    } catch (error) {
+      /* 件数を 0 に倒してはいけません。「未送信ゼロ」＝送信済みに見えるため、
+         ゲストが未送信を抱えたままタブを閉じます。直前の値を保ったまま
+         「確認できない」ことを表示します。 */
+      console.error('[queue] 件数を読めませんでした', error);
+      state.queueCountsUnknown = true;
+      updateQueueBadge();
+      return null;
+    }
+
+    state.queueCountsUnknown = false;
     state.pendingCount = items.filter((item) => !item.failed).length;
     state.failedCount = items.filter((item) => item.failed).length;
     updateQueueBadge();
@@ -1833,6 +2103,7 @@
   async function processQueue() {
     if (state.isQueueRunning) return;
     state.cancelQueue = false; // 前回の停止要求を持ち越さない
+    state.queuePaused = false; // これから動かすので「停止中」を解除します
 
     // 圏外のうちは 1 枚も試しません（online イベントで再開します）
     if (navigator.onLine === false) {
@@ -1847,6 +2118,10 @@
     let newFailures = 0;
     let circuitOpen = false;
     let uploadClosedHit = false;
+    /** サーバーが明示的に拒否したときの文言。「電波のせい」と案内しないため */
+    let lastServerError = null;
+    /** 何度送っても通らないと分かった理由（サイズ超過など）。再送を促さないため */
+    let permanentError = null;
     const handled = new Set(); // 打ち切り済み・消えた項目を再読み込みしないため
 
     try {
@@ -1858,7 +2133,15 @@
       let failureRounds = 0;
 
       for (let round = 0; round < 200 && failureRounds <= CONFIG.MAX_RETRY; round++) {
-        const keys = (await Queue.allKeys()).filter((key) => !handled.has(key));
+        let keys;
+        try {
+          keys = (await Queue.allKeys()).filter((key) => !handled.has(key));
+        } catch (error) {
+          /* キーが読めないなら、この巡回では何もできません。キューは消していないので
+             通信回復・画面復帰・手動再送のいずれかでやり直せます。 */
+          console.error('[queue] キーを読めませんでした', error);
+          break;
+        }
         if (keys.length === 0) break;
 
         let didWork = false;
@@ -1870,7 +2153,15 @@
           if (state.cancelQueue) { stop = true; break; }
           if (navigator.onLine === false) { stop = true; break; }
 
-          const item = await Queue.get(key);
+          let item;
+          try {
+            item = await Queue.get(key);
+          } catch (error) {
+            // 1 件読めないなら他も読めません。巡回を打ち切ります（写真は残します）
+            console.error('[queue] 項目を読めませんでした', error);
+            stop = true;
+            break;
+          }
           if (!item) { handled.add(key); continue; }
           if (item.failed) { handled.add(key); continue; }
 
@@ -1934,10 +2225,32 @@
               break;
             }
 
+            /* この 1 枚は何度送っても通らない（サイズ超過・形式不正など）。
+               リトライせずこの項目だけ打ち切り、残りの写真の送信は続けます。
+               写真は端末に残るので「端末に保存する」で取り出せます。 */
+            if (error.permanent) {
+              item.failed = true;
+              item.sendAttempts = (item.sendAttempts || 0) + 1;
+              await Queue.update(item);
+              handled.add(key);
+              markRecentShot(key, 'failed');
+              state.pendingCount = Math.max(0, state.pendingCount - 1);
+              state.failedCount++;
+              permanentError = error.message;
+              // 回線の問題ではないので、連続失敗のカウントには数えません
+              consecutiveFailures = 0;
+              updateQueueBadge();
+              continue;
+            }
+
             item.retry = (item.retry || 0) + 1;
             // こちらは巻き戻しません（サーバー側の二重登録チェックの判断材料）
             item.sendAttempts = (item.sendAttempts || 0) + 1;
             consecutiveFailures++;
+            /* サーバーが success:false を返した場合。設定ミス（トークン不一致・
+               FOLDER_ID の誤り・Drive の容量切れ）でもここを通るため、
+               あとで「電波の良い場所で」と案内しないよう覚えておきます。 */
+            if (error.isServerError) lastServerError = error.message;
             console.warn('[upload] 失敗 ' + item.retry + '/' + CONFIG.MAX_RETRY, error.message);
 
             if (item.retry >= CONFIG.MAX_RETRY) {
@@ -1978,6 +2291,17 @@
       } else if (uploadClosedHit) {
         toast(state.uploadClosedMessage
           + '未送信の写真は表紙画面の「端末に保存する」で取り出せます。', 'error', 9000);
+      } else if (permanentError) {
+        /* 再送を促してはいけない場合。「電波の良い場所で」と言うと、
+           絶対に通らないものを何度も送らせることになります。 */
+        toast(permanentError + ' この分は送信できないため送信待ちから外しました。'
+          + '表紙の「端末に保存する」で取り出せます。', 'error', 10000);
+      } else if (lastServerError) {
+        /* 電波を疑わせてはいけない場合。ゲストが会場を歩き回って撮り続けたあとで
+           全部が未送信になる、というのが一番避けたい終わり方です。 */
+        toast('サーバーから拒否されました（' + lastServerError + '）。'
+          + '電波の問題ではありません。写真は端末に残っているので、'
+          + '幹事・管理者にお知らせください。', 'error', 12000);
       } else if (circuitOpen) {
         toast('いま送信できませんでした。電波の良い場所で、表紙画面から再送してください。', 'error', 7000);
       } else if (newFailures > 0) {
@@ -1989,6 +2313,10 @@
       state.isQueueRunning = false;
       endUploadProgress();
       await refreshQueueCounts();
+      /* 巡回を終えたのに未送信が残っている＝止まっています（サーキット中断・
+         利用者の停止・圏外落ちなど）。バッジに正直に出します。 */
+      state.queuePaused = state.pendingCount > 0;
+      updateQueueBadge();
       updatePendingBanner();
     }
   }
@@ -1999,7 +2327,13 @@
    * @return {Promise<number>} 巻き戻した枚数
    */
   async function reviveFailedUploads(silent) {
-    const items = await Queue.all();
+    let items;
+    try {
+      items = await Queue.all();
+    } catch (error) {
+      console.error('[queue] 再送対象を読めませんでした', error);
+      return 0;
+    }
     const failed = items.filter((item) => item.failed);
     if (failed.length === 0) return 0;
 
@@ -2114,11 +2448,19 @@
         return;
       }
 
-      const files = items.map((item, index) => new File(
-        [item.blob],
-        'wedding_' + String(index + 1).padStart(3, '0') + '.jpg',
-        { type: 'image/jpeg' }
-      ));
+      /* 動画を .jpg で渡すと、写真アプリが受け取りを拒否したり、ZIP から出しても
+         開けないファイルになります。ここはキューから動画を救い出す唯一の導線なので、
+         exportArchive と同じく kind で名前と type を決めます。 */
+      const files = items.map((item, index) => {
+        const isVideo = item.kind === 'video';
+        const ext = isVideo ? extensionForMime(item.blob.type) : '.jpg';
+        const type = item.blob.type || (isVideo ? 'video/mp4' : 'image/jpeg');
+        return new File(
+          [item.blob],
+          'wedding_' + String(index + 1).padStart(3, '0') + ext,
+          { type: type }
+        );
+      });
 
       if (files.length <= CONFIG.SHARE_MAX && canShareFiles(files)) {
         state.pendingLocalFiles = files;
@@ -2132,7 +2474,7 @@
       files.forEach((file) => zip.file(file.name, file));
       const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
       downloadBlob(blob, 'wedding_unsent_photos.zip');
-      toast(files.length + ' 枚を ZIP で保存しました。「ファイル」アプリをご確認ください。', 'success', 7000);
+      toast(files.length + ' 件を ZIP で保存しました。「ファイル」アプリをご確認ください。', 'success', 7000);
       button.textContent = '端末に保存する';
     } catch (error) {
       console.error('[savePendingLocal]', error);
@@ -2177,6 +2519,18 @@
     const count = state.pendingCount;
     const up = state.upload;
 
+    /* 件数が読めていないとき。バッジを消すと 0 件（＝全部送信済み）と
+       見分けが付かないので、確認できていないことをはっきり出します。 */
+    if (state.queueCountsUnknown && count === 0 && state.failedCount === 0) {
+      els.queueBadgeText.textContent = '⚠️ 送信状況を確認できません';
+      els.queueSpinner.hidden = true;
+      els.btnCancelUpload.hidden = true;
+      els.queueBadge.classList.add('is-warning');
+      els.queueBadge.classList.remove('is-sending');
+      els.queueBadge.style.display = 'flex';
+      return;
+    }
+
     if (count > 0) {
       // 圏外なのに「送信中」と出すのは嘘になります
       const waiting = navigator.onLine === false;
@@ -2184,6 +2538,11 @@
 
       if (waiting) {
         label = count + ' 件：電波を待っています';
+      } else if (state.queuePaused) {
+        /* 送信が止まっているのに「送信中…」とスピナーを出し続けると、ゲストは
+           待てば送られると信じて表紙の再送に辿り着きません。✕ を押した直後に
+           「送信中…」が回り始めるのは、自分の停止操作との真正面からの矛盾です。 */
+        label = '⏸ ' + count + ' 件が未送信（タップで再送）';
       } else if (up.active) {
         const seconds = Math.floor((Date.now() - up.startedAt) / 1000);
         label = (up.isVideo ? '動画' : '写真')
@@ -2195,11 +2554,21 @@
       }
 
       els.queueBadgeText.textContent = label;
-      els.queueSpinner.hidden = waiting;
-      els.queueBadge.classList.toggle('is-warning', waiting);
-      els.queueBadge.classList.toggle('is-sending', up.active && !waiting);
+      els.queueSpinner.hidden = waiting || state.queuePaused;
+      els.queueBadge.classList.toggle('is-warning', waiting || state.queuePaused);
+      els.queueBadge.classList.toggle('is-sending', up.active && !waiting && !state.queuePaused);
       // 実際に送信が動いているときだけ停止ボタンを出します
       els.btnCancelUpload.hidden = !(state.isQueueRunning && !waiting);
+
+      /* 止まっているときはバッジ自体を再送ボタンにします。カメラ画面から表紙へ
+         戻らずにやり直せるようにするためです。 */
+      if (state.queuePaused) {
+        els.queueBadge.dataset.action = 'retry-uploads';
+        els.queueBadge.style.cursor = 'pointer';
+      } else {
+        delete els.queueBadge.dataset.action;
+        els.queueBadge.style.cursor = '';
+      }
       els.queueBadge.style.display = 'flex';
     } else if (state.failedCount > 0) {
       els.queueBadgeText.textContent = '⚠️ ' + state.failedCount + ' 枚が未送信';
@@ -2214,11 +2583,42 @@
 
   function updatePendingBanner() {
     const total = state.pendingCount + state.failedCount;
-    if (total > 0 && !state.isQueueRunning) {
+
+    /* 件数が読めていないときは、写真が残っているかどうかも分かりません。
+       黙ってバナーを隠すと「送信済み」と受け取られるので、再読み込みを促します。 */
+    if (state.queueCountsUnknown) {
       els.pendingBannerText.innerHTML =
-        '<b>送信できていない写真が ' + total + ' 枚あります。</b><br>' +
-        'このページを閉じても写真は端末に残っています。電波の良い場所で「今すぐ送信する」を押してください。<br>' +
-        'どうしても送れないときは「端末に保存する」で写真を取り出せます。';
+        '<b>送信状況を確認できませんでした。</b><br>' +
+        'このページを再読み込みしてください。未送信の写真が残っていれば、' +
+        '自動で送信を再開します。';
+      els.pendingBanner.style.display = 'block';
+      return;
+    }
+
+    /* 受付が終了している場合。「電波の良い場所で再送」と案内すると、絶対に通らない
+       送信を何度も試させることになります（同じ画面には「受付は終了しました」の
+       案内も出ているので、矛盾したことを 2 つ並べて見せてしまいます）。 */
+    if (total > 0 && !state.uploadOpen) {
+      els.pendingBannerText.innerHTML =
+        '<b>写真の受付が終了したため、この ' + total + ' 枚は共有アルバムに送れません。</b><br>' +
+        '下の「端末に保存する」で、ご自分の端末に取り出してください。';
+      els.btnRetryUploads.hidden = true;
+      els.pendingBanner.style.display = 'block';
+      return;
+    }
+    els.btnRetryUploads.hidden = false;
+
+    if (total > 0 && !state.isQueueRunning) {
+      /* 「端末に残っています」と言い切れるのは IndexedDB に書けているときだけです。
+         書けずにメモリ退避へ落ちている場合、タブを閉じた時点で消えます。
+         そこで嘘をつかず、いま取り出すよう促します。 */
+      els.pendingBannerText.innerHTML = Queue.isPersistent()
+        ? '<b>送信できていない写真が ' + total + ' 枚あります。</b><br>' +
+          'このページを閉じても写真は端末に残っています。電波の良い場所で「今すぐ送信する」を押してください。<br>' +
+          'どうしても送れないときは「端末に保存する」で写真を取り出せます。'
+        : '<b>送信できていない写真が ' + total + ' 枚あります。</b><br>' +
+          '<b>この端末の空き容量が足りず、写真を保存できていません。</b>' +
+          'このページを閉じると消えてしまうため、いま「端末に保存する」で取り出してください。';
       els.pendingBanner.style.display = 'block';
     } else {
       els.pendingBanner.style.display = 'none';
@@ -2246,6 +2646,14 @@
       console.warn('[status] 受付状況を取得できませんでした', error.message);
       state.uploadOpen = true;
       state.uploadClosedMessage = '';
+
+      /* ただしサーバーが明示的に拒否した場合は通信不良ではなく設定ミスです
+         （API_TOKEN の不一致・FOLDER_ID の誤りなど）。黙って「受付中」に倒すと、
+         ゲストが最後まで撮り続けたあとで全部が未送信になります。 */
+      if (error.isServerError) {
+        toast('サーバーに拒否されました（' + error.message + '）。'
+          + '設定の問題です。管理者にお知らせください。', 'error', 20000);
+      }
     }
     applyUploadStatusUI();
   }
@@ -2275,18 +2683,51 @@
    * Android は許可不要、iOS 13 以降はユーザー操作からの許可が要るため
    * ヒントのボタン経由にしています。
    * ======================================================================== */
+  /**
+   * 端末の物理的な向きを、重力ベクトルから判定します。
+   *
+   * |gamma| と |beta| を比べる方法は使えません。deviceorientation は ZXY 分解で
+   * gamma を [-90, 90) に畳んで報告するため、同じ物理姿勢でも「画面の仰角」
+   * （見下ろすか見上げるか）で beta / gamma の組が大きく変わります。実測すると
+   *
+   *   - 少し見下ろす（仰角 -5 度）: 画面内の傾き 30 度で「横持ち」に化ける
+   *   - 少し見上げる（仰角 +5 度）: 真の横持ち 90 度でも「縦持ち」のまま
+   *   - 画面がほぼ垂直       : |g-b| が 15 未満のままで永久にデッドゾーン
+   *
+   * となり、判定が答えと無関係な仰角で決まってしまいます。自動回転オンの端末を
+   * 縦に持って少し傾けただけで「横」と誤判定され、正常な写真が 90 度回って
+   * 保存されていました。
+   *
+   * 必要なのは「画面の中で重力がどちらを向いているか」だけなので、重力ベクトルの
+   * 画面内成分からロール角を直接求めます。これは仰角に依存しません。
+   */
   function applyDeviceOrientation(event) {
-    const gamma = event.gamma; // 左右の傾き
     const beta = event.beta;   // 前後の傾き
-    if (typeof gamma !== 'number' || typeof beta !== 'number') return;
+    const gamma = event.gamma; // 左右の傾き
+    if (typeof beta !== 'number' || typeof gamma !== 'number') return;
 
-    const g = Math.abs(gamma);
-    const b = Math.abs(beta);
-    // ほぼ水平に寝かせているときは判定できないので、前の値を保ちます
-    if (Math.abs(g - b) < 15) return;
-    state.physicalLandscape = g > b;
-    // どちら回りに倒したか。回転補正の向きに使います
-    if (state.physicalLandscape) state.tiltSign = gamma >= 0 ? 1 : -1;
+    const br = beta * Math.PI / 180;
+    const gr = gamma * Math.PI / 180;
+    // 端末座標系での重力方向のうち、画面に平行な 2 成分
+    const gx = Math.cos(br) * Math.sin(gr); // 画面の右向き
+    const gy = -Math.sin(br);               // 画面の上向き
+
+    // ほぼ水平に寝かせているときは向きを決められないので、前の値を保ちます
+    if (Math.sqrt(gx * gx + gy * gy) < 0.35) return;
+
+    // 0 度＝縦持ち、±90 度＝横持ち（+ が時計回り）
+    const roll = Math.atan2(gx, -gy) * 180 / Math.PI;
+    const tilt = Math.abs(roll);
+
+    /* 30〜60 度は前回の判定を維持します。しきい値を 1 本にすると、
+       境界付近で縦横がぱたぱた入れ替わります。 */
+    if (tilt > 60) {
+      state.physicalLandscape = true;
+      // どちら回りに倒したか。回転補正の向きに使います
+      state.tiltSign = roll > 0 ? 1 : -1;
+    } else if (tilt < 30) {
+      state.physicalLandscape = false;
+    }
   }
 
   /** 画面（OS）が横向きになっているか。傾きセンサーは見ません */
@@ -2352,23 +2793,11 @@
     toast('許可が得られませんでした。端末の「画面の自動回転」をオンにしてお試しください。', 'error', 7000);
   }
 
-  /**
-   * 端末が横向きかどうか。
-   *
-   * 傾きセンサーが使えるならそれを最優先します（画面回転がロックされていても
-   * 正しく判定できるため）。使えない場合は画面の向きで判断します。
-   */
-  function isLandscape() {
-    if (state.physicalLandscape !== null) return state.physicalLandscape;
-
-    try {
-      const angle = screen.orientation && screen.orientation.angle;
-      if (typeof angle === 'number') return angle === 90 || angle === 270;
-    } catch (error) { /* 下のフォールバックへ */ }
-
-    if (typeof window.orientation === 'number') return Math.abs(window.orientation) === 90;
-    return window.innerWidth > window.innerHeight;
-  }
+  /* かつてここに isLandscape() がありましたが、どこからも呼ばれていませんでした。
+     中身は applyDeviceOrientation の旧ロジック（仰角で結論が変わる誤った判定）を
+     そのまま抱えていたため、次に読む人が流用しないよう削除しました。
+     撮影範囲の判定には screenIsLandscape()、補正の判定には captureRotation() を
+     使ってください。 */
 
   /**
    * video の現在フレームを canvas に描きます。
@@ -2391,18 +2820,39 @@
     ctx.imageSmoothingQuality = 'high';
 
     if (CONFIG.CAPTURE_MODE === 'orientation') {
-      /* 切り出しは「画面に見えている向き」に合わせます。プレビューは常に
-         正しく見えているので、それをそのまま切り取るのが一番ずれません。
-         そのうえで、画面の向きと端末の実際の向きが食い違っている場合
-         （自動回転オフで横に構えたとき）だけ、最後に回転して世界基準で
-         正しい向きに直します。 */
-      const rotation = captureRotation();
-      const targetRatio = screenIsLandscape() ? (4 / 3) : (3 / 4);
+      /* 保存範囲は「プレビューで見えていた範囲」を必ず含めます。そのうえで
+         向き（縦 3:4 ／横 4:3）へ広げる方向にだけ寄せ、画面の向きと端末の実際の
+         向きが食い違っている場合（自動回転オフで横に構えたとき）は最後に回転して
+         世界基準で正しい向きに直します。
 
-      let srcW = vw;
-      let srcH = vh;
-      if (vw / vh > targetRatio) srcW = Math.round(vh * targetRatio);
-      else srcH = Math.round(vw / targetRatio);
+         「見えていた範囲を切らない」のが要点です。切り出し枠を画面に出していないので、
+         切ると撮った本人が気づけないまま端が落ちます。 */
+      const rotation = captureRotation();
+
+      /* まず「プレビューで実際に見えている範囲」を求めます。#cameraVideo は
+         object-fit: cover なので、画面より横長のフレームは左右が、縦長のフレームは
+         上下が画面外に隠れています。 */
+      const rect = video.getBoundingClientRect();
+      const coverScale = (rect.width && rect.height)
+        ? Math.max(rect.width / vw, rect.height / vh)
+        : 1;
+      let srcW = coverScale > 0 ? Math.min(vw, rect.width / coverScale) : vw;
+      let srcH = coverScale > 0 ? Math.min(vh, rect.height / coverScale) : vh;
+      if (!(srcW > 0) || !(srcH > 0)) { srcW = vw; srcH = vh; }
+
+      /* そこから目標比（縦 3:4 ／横 4:3）へ「広げる方向にだけ」寄せます。
+         狭める方向に寄せてはいけません。旧版は目標比でフレームを切っていたため、
+         プレビューに見えていた範囲より狭くなり、
+           1920x1080 のフレームを横持ち → 幅 1920 → 1440（25% が消える）
+           1080x1920 のフレームを縦持ち → 高さ 1920 → 1440（25% が消える）
+         と、撮った本人が見ていたものが落ちていました。
+         広げるだけなら、見えていたものは必ず全部残ります。 */
+      const targetRatio = screenIsLandscape() ? (4 / 3) : (3 / 4);
+      if (srcW / srcH < targetRatio) srcW = Math.min(vw, srcH * targetRatio);
+      else srcH = Math.min(vh, srcW / targetRatio);
+
+      srcW = Math.round(srcW);
+      srcH = Math.round(srcH);
 
       const sx = Math.round((vw - srcW) / 2);
       const sy = Math.round((vh - srcH) / 2);
@@ -2543,8 +2993,23 @@
   async function onShutter() {
     if (!getUserName()) { askUserName('camera'); return; }
 
-    // 動画モードは録画の開始／停止に振り分けます
-    if (state.captureKind === 'video') { await toggleRecording(); return; }
+    /* 動画モードは録画の開始／停止に振り分けます。
+       ここも連打ガードの内側に入れる必要があります。startRecording は
+       マイクの許可とカメラの再取得で 1〜3 秒待ちますが、そのあいだ
+       state.isRecording は false のままなので、2 回目のタップで getUserMedia が
+       2 本走り、片方のストリームが誰にも stop されない孤児になります
+       （カメラのインジケーターが点いたまま・recordTimer も二重に回る）。 */
+    if (state.captureKind === 'video') {
+      if (state.isCapturing) return;
+      state.isCapturing = true;
+      els.shutterBtn.disabled = true;
+      try { await toggleRecording(); }
+      finally {
+        state.isCapturing = false;
+        els.shutterBtn.disabled = false;
+      }
+      return;
+    }
 
     if (!state.stream) { await initCamera(); return; }
     if (state.isCapturing) return; // 連打ガード
@@ -2710,6 +3175,10 @@
       }
     } finally {
       hideProgress();
+      /* 中止フラグは、それを見ていた処理が終わったところで必ず降ろします。
+         降ろし忘れると callApiWithRetry(1 回も試さず break する)が以後ずっと
+         失敗し、アルバムも 1 枚保存も「電波の状況をご確認ください」になります。 */
+      state.cancelRequested = false;
     }
 
     await refreshQueueCounts();
@@ -2885,12 +3354,28 @@
     }, 100);
   }
 
+  /**
+   * 録画を止めます。実際の後始末は onstop（finishRecording）で行いますが、
+   * onstop が来ないことがあります（ストリームが先に死んでいた場合など）。
+   * その場合でも UI を必ず戻します。戻せないと ⏹ STOP のまま固着し、
+   * 写真モードにも戻せず、リロードするまで撮影できなくなります。
+   */
   function stopRecording() {
     if (!state.isRecording) return;
     clearInterval(state.recordTimer);
     state.recordTimer = null;
-    try { state.recorder.stop(); } catch (error) { console.warn('[rec] stop', error.message); }
-    // 実際の後始末は onstop（finishRecording）で行います
+
+    const recorder = state.recorder;
+    try {
+      if (recorder && recorder.state !== 'inactive') recorder.stop();
+      else resetRecordingUi(); // 既に止まっている＝onstop は来ません
+    } catch (error) {
+      console.warn('[rec] stop', error.message);
+      resetRecordingUi();
+    }
+
+    // 最後の保険。onstop が来なければここで戻します
+    setTimeout(() => { if (state.isRecording) resetRecordingUi(); }, 3000);
   }
 
   function resetRecordingUi() {
@@ -2961,11 +3446,15 @@
   async function restartCameraWithAudio() {
     const previous = state.stream;
     try {
+      /* 解像度の希望値は initCamera と同じ CONFIG から取ります。ここだけ低い値に
+         しておくと、動画を 1 本撮ったあと写真モードに戻してもストリームが
+         差し替わらないため、以降その端末の写真だけ解像度が半分以下になります。
+         容量は VIDEO_BITS_PER_SEC で抑えられるので、解像度を落とす必要はありません。 */
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: state.facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: CONFIG.VIDEO_IDEAL_HEIGHT }
+          width: { ideal: CONFIG.CAPTURE_IDEAL_WIDTH },
+          height: { ideal: CONFIG.CAPTURE_IDEAL_HEIGHT }
         },
         audio: true
       });
@@ -2978,13 +3467,28 @@
       return true;
     } catch (error) {
       console.warn('[rec] 音声つきで取得できません', error.name);
-      if (state.stream === previous && previous) {
-        // 元のストリームがそのまま生きているので、映像だけで録画します
+
+      /* 同じオブジェクトかどうかではなく、トラックが生きているかを見ます。
+         iOS Safari は同時に 1 つのキャプチャセッションしか持てず、2 回目の
+         getUserMedia を開始した時点で先行ストリームのトラックを ended にします。
+         マイクを拒否された場合 state.stream === previous は成立しますが中身は
+         死んでおり、プレビューが最後のフレームで凍ったまま録画は 0 バイト、
+         写真モードに戻しても同じ静止フレームが送られ続けていました
+         （videoWidth は残るので captureFrame の黒画像ガードも効きません）。 */
+      const alive = previous && previous.getVideoTracks().some((t) => t.readyState === 'live');
+      if (state.stream === previous && alive) {
         state.streamHasAudio = false;
         toast('マイクが使えないため、音声なしで録画します。', null, 5000);
         return true;
       }
+
+      // 死んでいたら必ず取り直します。映像だけ取れれば録画は続けられます
       await initCamera();
+      if (state.stream) {
+        state.streamHasAudio = false;
+        toast('マイクが使えないため、音声なしで録画します。', null, 5000);
+        return true;
+      }
       toast('カメラを取得できませんでした。', 'error');
       return false;
     }
@@ -3006,8 +3510,8 @@
     const constraints = {
       video: {
         facingMode: { ideal: state.facingMode },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
+        width: { ideal: CONFIG.CAPTURE_IDEAL_WIDTH },
+        height: { ideal: CONFIG.CAPTURE_IDEAL_HEIGHT }
       },
       audio: false
     };
@@ -3133,7 +3637,13 @@
     if (state.currentView === 'camera') {
       const tracks = state.stream ? state.stream.getVideoTracks() : [];
       const isDead = tracks.length === 0 || tracks.some((track) => track.readyState === 'ended');
-      if (isDead) initCamera();
+      if (isDead) {
+        /* 録画中に復帰した場合は先に録画を畳みます。initCamera は stopCamera() で
+           ストリームを差し替えるだけで isRecording / recorder には触らないため、
+           これが無いとシャッターが ⏹ STOP のまま固着します。 */
+        if (state.isRecording) stopRecording();
+        initCamera();
+      }
     }
 
     // 復帰時に未送信分の送信を再開します。カメラ画面以外でも動かします
@@ -3251,6 +3761,37 @@
     els.rotateHint.classList.toggle('is-visible', show);
   }
 
+  /* ==========================================================================
+   * カメラコントロールの実高
+   * ------------------------------------------------------------------------
+   * ヒントの位置を固定値（旧 120px）で決めると、写真/動画スイッチと直近サムネイルの
+   * 帯を覆います。しかもヒントは pointer-events: auto なのでタップも通りません。
+   * 実際の高さを測って CSS 変数に流し、必ずコントロールの上に置きます。
+   * ======================================================================== */
+  let controlsObserver = null;
+
+  function trackControlsHeight() {
+    const overlay = document.querySelector('.camera-controls-overlay');
+    if (!overlay) return;
+
+    const apply = () => {
+      /* 横向きでは overlay が画面右の縦帯（高さ 100%）になるため、高さを基準に
+         すると画面外へ飛びます。横向き用の位置は CSS 側で指定しています。 */
+      let landscape = false;
+      try { landscape = window.matchMedia('(orientation: landscape)').matches; }
+      catch (error) { landscape = window.innerWidth > window.innerHeight; }
+
+      if (landscape) document.documentElement.style.removeProperty('--controls-h');
+      else document.documentElement.style.setProperty('--controls-h', overlay.offsetHeight + 'px');
+    };
+
+    apply();
+
+    if (controlsObserver || typeof ResizeObserver === 'undefined') return;
+    controlsObserver = new ResizeObserver(apply);
+    controlsObserver.observe(overlay);
+  }
+
   function syncFullscreenUI() {
     if (!Fullscreen.isSupported()) { els.btnFullscreenToggle.hidden = true; return; }
     els.btnFullscreenToggle.hidden = false;
@@ -3265,13 +3806,19 @@
    * 画面遷移
    * ======================================================================== */
   function navigateTo(target) {
-    if ((target === 'camera' || target === 'album') && !getUserName()) {
+    /* 名前を聞くのは投稿する人にだけです。閲覧まで関所にすると、「みんなの写真を
+       見るだけ」のつもりで開いた人が、キャンセルの無い同意画面で行き止まりになります。
+       撮影・アップロードの入口（openCameraWithFullscreen / openPhotoPicker）が
+       別途名前を要求するので、ここから外しても投稿者名が空になることはありません。 */
+    if (target === 'camera' && !getUserName()) {
       askUserName(target);
       return;
     }
 
     document.querySelectorAll('.view-screen').forEach((el) => el.classList.remove('active'));
     state.currentView = target;
+    // カメラ画面ではトーストを上へ退避させます（シャッターに重ねないため）
+    document.body.classList.toggle('is-camera', target === 'camera');
 
     if (target === 'camera') {
       els['view-camera'].classList.add('active');
@@ -3283,6 +3830,7 @@
       if (!needsMotionPermission()) startOrientationSensor();
       syncRotateHint();
       syncIosFullscreenHint();
+      trackControlsHeight();
       initCamera();
       return;
     }
@@ -3329,7 +3877,9 @@
     els.nameInput.value = current;
     els.nameInputHint.textContent = '20 文字まで';
     els.nameInputHint.classList.remove('is-error');
-    els.nameModalCancelBtn.hidden = !current;
+    /* キャンセルは常に出します。旧版は未設定のときだけ隠しており、背景タップも
+       Escape も効かないため、名前を入れる以外に出口が無い状態でした。 */
+    els.nameModalCancelBtn.hidden = false;
     openOverlay(els.nameModal);
     // iOS はモーダル表示直後の focus を無視することがあるため少し遅らせます
     setTimeout(() => els.nameInput.focus(), 120);
@@ -3371,6 +3921,8 @@
     if (reset) {
       state.albumImages = [];
       state.nextPageToken = null;
+      state.albumDegraded = false;
+      state.albumTruncated = false;
       state.selectedIds.clear();
       els.photoGrid.innerHTML = '';
       state.renderedCount = 0;
@@ -3387,6 +3939,18 @@
       /* 重複の除外。サーバーが同じ写真を返しても画面が壊れないようにします
          （実際、pageToken が長いとキャッシュキーの上限を超えて全件フォールバックに
          落ち、2 ページ目に 1 ページ目が丸ごと混ざる不具合がありました）。 */
+      /* サーバーが REST の失敗を検知して全件フォールバックに落ちた場合の申告。
+         一部しか返っていない可能性があるので、断定的に見せず読み直しを促します
+         （GAS 側のパッチ B で返るようになります。未適用なら undefined のまま）。 */
+      const wasDegraded = state.albumDegraded;
+      state.albumDegraded = !!response.degraded;
+      state.albumTruncated = !!response.truncated;
+      if (state.albumDegraded && !wasDegraded) {
+        toast(state.albumTruncated
+          ? 'いま一部の写真だけを表示しています。↻ で読み直してください。'
+          : 'いま簡易表示になっています。↻ で読み直すと最新の並びになります。', null, 8000);
+      }
+
       const known = new Set(state.albumImages.map((img) => img.id));
       const incoming = (response.data || []).filter((img) => img && !known.has(img.id));
       const duplicates = (response.data || []).length - incoming.length;
@@ -3551,27 +4115,53 @@
   }
 
   function updateDownloadBarUI() {
-    const total = state.albumImages.length;
-    const selected = state.selectedIds.size;
+    /* まとめて保存の対象は写真だけです（動画は 1 本ずつ）。表示もそれに合わせます。
+       旧版は動画を含めた総数を出していたため、「表示中の 30 枚を保存」と言って
+       26 枚しか保存されない、という食い違いが起きていました。 */
+    const photos = state.albumImages.filter((img) => !img.isVideo);
+    const videoCount = state.albumImages.length - photos.length;
+    const selectedPhotos = photos.filter((img) => state.selectedIds.has(img.id)).length;
+    const more = (state.nextPageToken || state.albumTruncated) ? '以上' : '';
 
     if (state.isSelectMode) {
-      els.downloadBarInfo.textContent = '全 ' + total + ' 枚中 ' + selected + ' 枚';
-      els.selectedCountText.textContent = selected + ' 枚選択中';
-      els.btnExecDownload.textContent = '⬇️ ' + selected + ' 枚を保存';
-      els.btnExecDownload.disabled = selected === 0;
+      els.downloadBarInfo.textContent = '写真 ' + photos.length + ' 枚中 ' + selectedPhotos + ' 枚';
+      els.selectedCountText.textContent = state.selectedIds.size + ' 件選択中';
+
+      if (selectedPhotos === 0 && state.selectedIds.size > 0) {
+        // 動画だけを選んだ状態。0 枚と出すより理由を書いたほうが伝わります
+        els.btnExecDownload.textContent = '⬇️ 動画は 1 本ずつ保存';
+      } else {
+        els.btnExecDownload.textContent = '⬇️ ' + selectedPhotos + ' 枚を保存';
+      }
+      els.btnExecDownload.disabled = selectedPhotos === 0;
     } else {
-      els.downloadBarInfo.textContent = '全 ' + total + ' 枚' + (state.nextPageToken ? '以上' : '');
-      els.btnExecDownload.textContent = '⬇️ 表示中の ' + total + ' 枚を保存';
-      els.btnExecDownload.disabled = total === 0;
+      els.downloadBarInfo.textContent = '写真 ' + photos.length + ' 枚' + more
+        + (videoCount > 0 ? ' / 動画 ' + videoCount + ' 本' : '');
+      els.btnExecDownload.textContent = '⬇️ 写真 ' + photos.length + ' 枚を保存';
+      els.btnExecDownload.disabled = photos.length === 0;
     }
   }
 
   /* ==========================================================================
    * プレビューモーダル
    * ======================================================================== */
+  /* 「✨ 保存しました」からボタンを元に戻すタイマー。
+     モーダルを開閉したら必ず止めます。止めないと、保存直後 2.2 秒以内に別の写真へ
+     切り替えたときに、タイマーがボタンの onclick を前の写真へ書き戻し、
+     押すと違う写真が保存されます。 */
+  let singleSaveTimer = null;
+
+  function clearSingleSaveTimer() {
+    clearTimeout(singleSaveTimer);
+    singleSaveTimer = null;
+  }
+
   function openImageModal(imgData) {
+    clearSingleSaveTimer();
     els.modalUploaderName.textContent = imgData.uploader || 'ゲスト';
     const button = els.modalDownloadBtn;
+    // タイマー側が「まだ同じ写真を開いているか」を確認するための目印
+    button.dataset.photoId = imgData.id;
 
     if (imgData.isVideo) {
       /* 動画は Drive のプレビューで再生します。
@@ -3586,7 +4176,10 @@
       button.onclick = () => saveSinglePhoto(imgData, button);
     } else {
       els.modalVideoWrap.hidden = true;
-      els.modalVideo.src = '';
+      /* iframe.src = '' は「空」ではなく、文書の URL に解決されます。つまり
+         このアプリ自体が iframe の中に丸ごと読み込まれ、Service Worker の登録や
+         起動処理が二重に走ります。空にするには about:blank を使います。 */
+      els.modalVideo.src = 'about:blank';
       els.modalImgWrap.hidden = false;
       els.modalImg.src = imgData.highResUrl;
       els.modalImg.alt = (imgData.uploader || 'ゲスト') + ' さんの写真';
@@ -3599,9 +4192,11 @@
   }
 
   function closeImageModal() {
+    clearSingleSaveTimer();
     closeOverlay(els.imageModal);
     els.modalImg.src = '';
-    els.modalVideo.src = ''; // 閉じても再生が続かないように
+    // 閉じても再生が続かないように。'' はアプリ自体を読み込むので about:blank
+    els.modalVideo.src = 'about:blank';
   }
 
   /**
@@ -3638,8 +4233,12 @@
       } else {
         downloadBlob(blob, fileName);
         button.textContent = '✨ 保存しました';
-        setTimeout(() => {
-          button.textContent = '⬇️ 保存する';
+        clearSingleSaveTimer();
+        singleSaveTimer = setTimeout(() => {
+          singleSaveTimer = null;
+          // 別の写真に切り替わっていたら、ボタンを乗っ取らずに何もしません
+          if (button.dataset.photoId !== imgData.id) return;
+          button.textContent = imgData.isVideo ? '⬇️ 動画を保存' : '⬇️ 保存する';
           button.disabled = false;
           button.onclick = () => saveSinglePhoto(imgData, button);
         }, 2200);
@@ -3797,6 +4396,9 @@
       hideProgress();
       console.error('[share]', error);
       toast('保存を準備できませんでした。', 'error');
+    } finally {
+      // 中止フラグを次の操作へ持ち越さない（上の判定はすべて try の中で済んでいます）
+      state.cancelRequested = false;
     }
   }
 
@@ -3818,17 +4420,48 @@
     }
   }
 
-  /** JSZip は使うときだけ読み込みます（会場の回線を無駄に使わないため） */
+  /**
+   * JSZip は使うときだけ読み込みます（会場の回線を無駄に使わないため）。
+   *
+   * 旧版は毎回 <script> を足しており、15 秒でタイムアウトしても外していなかった
+   * ため、タップのたびにタグが増えていました。読み込み中の Promise を使い回します。
+   *
+   * crossOrigin を付けるのは、Service Worker にキャッシュさせるためです。
+   * 属性が無いと no-cors 扱いで response.type が 'opaque' になり、sw.js の
+   * キャッシュ判定（response.ok）を通らないので、毎回ネットワークに出ます。
+   */
+  let jsZipPromise = null;
+
   function loadJsZip() {
     if (window.JSZip) return Promise.resolve(window.JSZip);
-    return new Promise((resolve, reject) => {
+    if (jsZipPromise) return jsZipPromise;
+
+    jsZipPromise = new Promise((resolve, reject) => {
       const script = document.createElement('script');
+      let timer = null;
+      const cleanup = () => {
+        clearTimeout(timer);
+        script.remove();
+      };
+
       script.src = CONFIG.JSZIP_URL;
-      script.onload = () => window.JSZip ? resolve(window.JSZip) : reject(new Error('jszip_missing'));
-      script.onerror = () => reject(new Error('jszip_load_failed'));
+      script.crossOrigin = 'anonymous';
+      if (CONFIG.JSZIP_SRI) script.integrity = CONFIG.JSZIP_SRI;
+      script.onload = () => {
+        cleanup();
+        // タグを外しても、実行済みのグローバルは残ります
+        window.JSZip ? resolve(window.JSZip) : reject(new Error('jszip_missing'));
+      };
+      script.onerror = () => { cleanup(); reject(new Error('jszip_load_failed')); };
+      timer = setTimeout(() => { cleanup(); reject(new Error('jszip_timeout')); }, 15000);
+
       document.head.appendChild(script);
-      setTimeout(() => reject(new Error('jszip_timeout')), 15000);
+    }).catch((error) => {
+      jsZipPromise = null; // 次のタップでやり直せるように
+      throw error;
     });
+
+    return jsZipPromise;
   }
 
   async function saveViaZip() {
@@ -3865,6 +4498,9 @@
       } else {
         toast('ZIP を作成できませんでした。', 'error');
       }
+    } finally {
+      // 中止フラグを次の操作へ持ち越さない（上の判定はすべて try の中で済んでいます）
+      state.cancelRequested = false;
     }
   }
 
@@ -3933,7 +4569,8 @@
     'load-more': () => loadAlbum(false),
     'toggle-select-mode': toggleSelectMode,
     'select-all': () => {
-      state.albumImages.forEach((img) => state.selectedIds.add(img.id));
+      // 動画はまとめて保存できないので選択対象から外します
+      state.albumImages.forEach((img) => { if (!img.isVideo) state.selectedIds.add(img.id); });
       syncSelectionUI();
       updateDownloadBarUI();
     },
@@ -3975,8 +4612,14 @@
       const backdrop = event.target.closest('[data-close-on-backdrop]');
       if (backdrop && event.target === backdrop) {
         closeOverlay(backdrop);
-        if (backdrop === els.imageModal) { els.modalImg.src = ''; els.modalVideo.src = ''; }
+        if (backdrop === els.imageModal) {
+          els.modalImg.src = '';
+          els.modalVideo.src = 'about:blank';
+          clearSingleSaveTimer();
+        }
         if (backdrop === els.downloadSheet) state.preparedFiles = null;
+        // 保留していた遷移先を抱えたままにしない
+        if (backdrop === els.nameModal) state.pendingNavigation = null;
       }
     });
 
@@ -3995,6 +4638,7 @@
       if (event.key !== 'Escape') return;
       if (els.imageModal.classList.contains('is-open')) closeImageModal();
       else if (els.downloadSheet.classList.contains('is-open')) ACTIONS['close-download-sheet']();
+      else if (els.nameModal.classList.contains('is-open')) closeNameModal();
     });
 
     document.addEventListener('fullscreenchange', syncFullscreenUI);
@@ -4030,6 +4674,15 @@
     ELEMENT_IDS.forEach((id) => { els[id] = document.getElementById(id); });
 
     els.status.textContent = '';
+
+    /* 端末への控えの説明は iPhone と Android で実態が違います。iOS はブラウザが
+       自動ダウンロードを塞いでいるため、写真アプリには 1 枚も入りません。
+       同意を取る画面はここだけなので、成立しないことを書いてはいけません。 */
+    els.privacyAutoSave.innerHTML = canAutoDownload()
+      ? '撮った写真は、送信とは別に<b>お使いの端末にも自動で保存されます</b>（表紙で切り替えられます）。'
+      : '撮った写真は、送信とは別に<b>このページの中に控えが残ります</b>。'
+        + '写真アプリに入れるには、表紙の「この端末で撮った ○ 件を保存」を押してください。';
+
     checkInAppBrowser();
     updateUserNameDisplay();
     syncFullscreenUI();
@@ -4054,7 +4707,13 @@
     // 前回終了時の未送信分を復元して再送します
     try {
       const items = await refreshQueueCounts();
-      if (items.length > 0) {
+
+      /* null は「読めなかった」です。0 件と同じ扱いにすると、未送信を抱えたまま
+         何も表示されない状態になります。 */
+      if (items === null) {
+        toast('送信待ちの写真を確認できませんでした。'
+          + 'ページを再読み込みしてお試しください。', 'error', 9000);
+      } else if (items.length > 0) {
         /* 打ち切り済みも起動時に一度だけ再挑戦します。
            旧版はここで全項目を書き戻していました（mutate してから
            !item.failed で絞ったため、条件が全件に一致していました）。 */

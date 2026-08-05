@@ -13,7 +13,7 @@
  *   当日の緊急修正が反映されないと困るため、通信があれば必ず新しい方を使います。
  */
 
-const CACHE_NAME = 'wedcam-shell-v3';
+const CACHE_NAME = 'wedcam-shell-v4';
 
 /**
  * opaque レスポンスでもキャッシュを許すホスト。
@@ -92,8 +92,26 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(cacheKey, copy)).catch(() => {});
+          /* 200 かつ自サイトの応答だけを焼きます。ここに検査が無いと、
+             次の 2 つを恒久的にキャッシュしてしまいます。
+
+             - 会場 Wi-Fi のキャプティブポータル。同意ページを踏む前に開くと
+               fetch は失敗せず「200 でポータルの HTML」を返すため、以後
+               オフラインでリロードするたびにポータルの画面が出ます
+             - 当日の緊急修正 push。GitHub Pages の再ビルド中は数十秒 404 の窓が
+               あり、そこでリロードしたゲストが 404 を焼き付けます
+
+             真っ白を防ぐための Service Worker が、壊れた画面を恒久的に出す
+             装置になってしまうため、cache-first 側と同じく検査します。 */
+          let sameOrigin = false;
+          try {
+            sameOrigin = new URL(response.url || request.url).origin === self.location.origin;
+          } catch (error) { sameOrigin = false; }
+
+          if (response.ok && sameOrigin && !response.redirected) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(cacheKey, copy)).catch(() => {});
+          }
           return response;
         })
         .catch(() => caches.match(cacheKey).then((cached) => cached || Response.error()))
