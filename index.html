@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="ja" class="is-cover">
 <head>
   <meta charset="utf-8">
   <title>Wedding Camera</title>
@@ -28,8 +28,10 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <!-- 会場の回線を考え、実際に使うウェイトだけに絞っています -->
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,600&family=Noto+Sans+JP:wght@400;700&family=Zen+Maru+Gothic:wght@500&display=swap" rel="stylesheet">
+  <!-- 会場の回線を考え、実際に使うウェイトだけに絞っています。
+       DotGothic16 は表紙だけで使う招待状サイトと同じドット書体です（1 ウェイトのみ）。
+       display=swap なので、読めないうちは MS ゴシック等で先に表示されます。 -->
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,600&family=DotGothic16&family=Noto+Sans+JP:wght@400;700&family=Zen+Maru+Gothic:wght@500&display=swap" rel="stylesheet">
 
   <style>
     :root {
@@ -62,6 +64,10 @@
        - clip 非対応の旧 Safari では body は visible に戻り、html 側の hidden が効きます */
     html { overflow-x: hidden; }
     body { overflow-x: clip; }
+    /* 表紙は濃紺。html にも載せるのは、iOS のバウンススクロールではみ出して見えるのが
+       html の背景だからです（html と body の両方に地色があるので伝播は起きません）。
+       アルバムとカメラは従来どおりです。 */
+    html.is-cover, body.is-cover { background-color: #0a1040; }
 
     button { font-family: inherit; }
     button:focus-visible,
@@ -106,97 +112,177 @@
       overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
     }
 
+    /* 端末の写真を選ぶための <input type="file">。
+       hidden / display:none にすると iOS Safari が .click() を無視してピッカーを
+       開きません（Android Chrome は開くので iPhone だけ不具合に見えます）。
+       レイアウト上は存在させたまま、見えないようにします。 */
+    .file-input-offscreen {
+      position: fixed; top: 0; left: 0; z-index: -1;
+      width: 1px; height: 1px; opacity: 0;
+      border: 0; padding: 0; margin: 0;
+    }
+
     .view-screen { display: none; width: 100%; min-height: 100dvh; }
     .view-screen.active { display: flex; animation: fadeIn 0.35s ease-out; }
     @keyframes fadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
 
-    /* ── 表紙 ───────────────────────────────────────────── */
+    /* ── 表紙 ───────────────────────────────────────────────
+       招待状サイト（https://yamashita-wedding.netlify.app/）のトンマナに合わせた
+       濃紺 + ネオン + ドット書体です。実際の配色を採寸して使っています。
+         地       #0a1040   見出し   #00ccff（シアン）
+         名前     #ffee00   日付枠   #ff44cc（マゼンタ）
+         補助     #00ee44   本文     #e0eeff
+       この指定は表紙の中だけに閉じています。カメラ画面とアルバムは従来のまま
+       （撮る・見る・保存するの導線を変えないため）。 */
     #view-cover {
       flex-direction: column; align-items: center; justify-content: center;
       padding: 30px 20px;
-      /* 外部 CDN 依存を外し、まず単色で必ず描かれるようにしています。
-         背景写真を使う場合は ./assets/cover.jpg を置いてください。 */
-      background-color: #efe6e0;
-      background-image: url('./assets/cover.jpg');
+      background-color: #0a1040;
+      background-image:
+        radial-gradient(circle at 20% 18%, rgba(60, 80, 180, 0.40) 0%, rgba(0,0,0,0) 52%),
+        radial-gradient(circle at 82% 82%, rgba(80, 20, 100, 0.32) 0%, rgba(0,0,0,0) 52%);
       background-size: cover; background-position: center;
       position: relative;
+      font-family: 'DotGothic16', 'MS Gothic', monospace;
     }
-    .cover-bg-overlay {
-      position: absolute; inset: 0;
-      background: rgba(255, 255, 255, 0.65); z-index: 1;
-    }
+    /* 旧版は白 65% を敷いて背景写真を淡くしていました。濃紺地では不要です */
+    .cover-bg-overlay { display: none; }
+
     .cover-content {
       position: relative; z-index: 2; width: 100%; max-width: 380px;
-      padding: 40px 25px; display: flex; flex-direction: column; align-items: center;
+      padding: 26px 22px; display: flex; flex-direction: column; align-items: center;
+      background: rgba(6, 9, 58, 0.82);
+      border: 2px solid #00ccff;
+      border-radius: 6px;
+      box-shadow: 0 0 12px rgba(0, 204, 255, 0.55), inset 0 0 20px rgba(0, 204, 255, 0.10);
+      backdrop-filter: none; -webkit-backdrop-filter: none;
     }
+
+    /* ★☆ の区切り線。招待状の見出し上下と同じ役割です */
+    .cover-stars {
+      color: #00ee44; font-size: 12px; letter-spacing: 2px; line-height: 1;
+      text-shadow: 0 0 6px rgba(0, 238, 68, 0.7);
+      margin: 2px 0 10px; user-select: none;
+    }
+    .cover-stars.is-bottom { margin: 14px 0 4px; color: #ffee00;
+      text-shadow: 0 0 6px rgba(255, 238, 0, 0.7); }
+
+    /* 誰の結婚式か */
+    .cover-couple {
+      margin: 0 0 10px; font-size: 21px; line-height: 1.4; color: #ffee00;
+      letter-spacing: 2px;
+      text-shadow: 0 0 6px rgba(255, 238, 0, 0.85), 0 0 16px rgba(255, 153, 0, 0.55);
+    }
+    .cover-couple .amp { color: #ff44cc; margin: 0 6px;
+      text-shadow: 0 0 8px rgba(255, 68, 204, 0.9); }
+    /* いつか */
+    .cover-date {
+      display: inline-block; margin: 0 0 16px; padding: 7px 14px;
+      font-size: 14px; letter-spacing: 1px; color: #fff;
+      border: 2px solid #ff44cc; border-radius: 4px;
+      background: rgba(255, 68, 204, 0.14);
+      box-shadow: 0 0 10px rgba(255, 68, 204, 0.6);
+    }
+    .cover-venue { margin: 0 0 14px; font-size: 11px; color: #88aacc; letter-spacing: 1px; }
+
     .cover-title h1 {
-      margin: 10px 0 0; font-size: 34px; color: var(--wedding-gold);
-      font-family: 'Cormorant Garamond', serif; font-style: italic;
-      letter-spacing: 1.5px; line-height: 1.1;
+      margin: 10px 0 0; font-size: 25px; color: #00ccff;
+      font-family: 'DotGothic16', 'MS Gothic', monospace; font-style: normal;
+      letter-spacing: 2px; line-height: 1.25;
+      text-shadow: 0 0 6px rgba(0, 204, 255, 0.9), 0 0 18px rgba(102, 68, 255, 0.7);
     }
-    .cover-title p { margin: 5px 0 25px; font-size: 12px; color: #5f5f5f; letter-spacing: 2px; }
+    .cover-title p { margin: 6px 0 18px; font-size: 11px; color: #e0eeff; letter-spacing: 2px; }
 
     .cover-user-box {
-      margin-bottom: 25px; font-size: 13px;
-      padding: 10px 20px; border-radius: 30px; background: rgba(255,255,255,0.85);
-      border: 1px solid rgba(223, 168, 180, 0.4);
+      margin-bottom: 20px; font-size: 12px;
+      padding: 9px 16px; border-radius: 4px;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid #00ee44; color: #e0eeff;
+      box-shadow: 0 0 8px rgba(0, 238, 68, 0.40);
       display: inline-flex; align-items: center; gap: 6px;
     }
     .edit-name-btn {
-      color: var(--wedding-pink-deep); cursor: pointer; font-size: 11px;
+      color: #00ee44; cursor: pointer; font-size: 11px;
       text-decoration: underline; background: none; border: none; padding: 4px;
     }
 
-    .cover-buttons { width: 100%; display: flex; flex-direction: column; gap: 14px; }
+    .cover-buttons { width: 100%; display: flex; flex-direction: column; gap: 12px; }
     .btn-mode-select {
-      width: 100%; padding: 16px 20px; border-radius: 35px; border: none;
+      width: 100%; padding: 15px 18px; border-radius: 6px; border: none;
       font-size: 15px; font-weight: 700; cursor: pointer;
+      font-family: 'DotGothic16', 'MS Gothic', monospace; letter-spacing: 1px;
       display: flex; align-items: center; justify-content: center; gap: 10px;
-      transition: transform 0.2s ease; box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+      transition: transform 0.2s ease;
       -webkit-tap-highlight-color: transparent;
     }
+    /* 明るいネオンピンクを地にすると白文字が 2.8:1 しか出ません（実測）。
+       地は濃いめにして 4.7:1 を確保し、光り方は枠線とグローで出します。 */
     .btn-mode-camera {
-      background: linear-gradient(135deg, #e8b4be 0%, var(--wedding-pink) 100%);
-      color: #fff; box-shadow: 0 8px 25px rgba(223, 168, 180, 0.4);
+      background: linear-gradient(180deg, #d81b8c 0%, #9c0f66 100%);
+      color: #fff; border: 2px solid #ff9ae4;
+      box-shadow: 0 0 14px rgba(255, 68, 204, 0.65);
     }
     .btn-mode-camera:active { transform: scale(0.96); }
-    .btn-mode-album { background: #fff; color: #444; border: 1.5px solid var(--wedding-gold); }
-    .btn-mode-album:active { transform: scale(0.96); background: #fafafa; }
-    .btn-mode-upload { background: #fff; color: #444; border: 1.5px solid var(--wedding-pink); }
-    .btn-mode-upload:active { transform: scale(0.96); background: #fff8fa; }
+    .btn-mode-album {
+      background: rgba(0, 0, 0, 0.5); color: #ffee00; border: 2px solid #ffee00;
+      box-shadow: 0 0 10px rgba(255, 238, 0, 0.45);
+    }
+    .btn-mode-album:active { transform: scale(0.96); background: rgba(255, 238, 0, 0.12); }
+    .btn-mode-upload {
+      background: rgba(0, 0, 0, 0.5); color: #00ccff; border: 2px solid #00ccff;
+      box-shadow: 0 0 10px rgba(0, 204, 255, 0.45);
+    }
+    .btn-mode-upload:active { transform: scale(0.96); background: rgba(0, 204, 255, 0.12); }
     .btn-mode-archive {
-      background: #f7f4ef; color: #5f5346; border: 1.5px dashed #c9b79c;
+      background: rgba(0, 0, 0, 0.4); color: #00ee44; border: 2px dashed #00ee44;
       font-size: 13px; box-shadow: none;
     }
     .btn-mode-archive:active { transform: scale(0.96); }
     .btn-mode-archive[hidden] { display: none; }
 
     .autosave-toggle {
-      background: transparent; border: none; color: #6b6b6b; font-size: 11px;
+      background: transparent; border: none; color: #88aacc; font-size: 11px;
       margin-top: 14px; cursor: pointer; text-decoration: underline;
-      padding: 4px;
+      padding: 4px; font-family: 'DotGothic16', 'MS Gothic', monospace;
     }
     .autosave-toggle[hidden] { display: none; }
 
-    /* 未送信の写真がある場合の通知 */
+    /* DotGothic16 は等幅に近く、Noto Sans JP より横に広がります。
+       iPhone SE 幅（320px）では「端末の写真をアップロード」が 2 行に割れるため、
+       表紙だけ文字を詰めます。 */
+    @media (max-width: 360px) {
+      .cover-content { padding: 22px 14px; }
+      .cover-couple { font-size: 18px; }
+      .cover-title h1 { font-size: 21px; }
+      .cover-stars { font-size: 11px; letter-spacing: 1px; }
+      .btn-mode-select { font-size: 13px; padding: 14px 10px; gap: 8px; }
+      .btn-mode-archive { font-size: 12px; }
+    }
+
+    /* 未送信の写真がある場合の通知。表紙が濃紺になったので、
+       警告であることが伝わる明るさは保ったまま暗地のネオンに合わせます */
     .pending-banner {
       display: none; width: 100%; max-width: 380px; margin-top: 16px;
-      background: #fff4e5; border: 1px solid #f0c98d; border-radius: 14px;
-      padding: 14px 16px; font-size: 12px; line-height: 1.6; color: #7a5a1e;
+      background: rgba(40, 20, 0, 0.88); border: 2px solid #ff9900; border-radius: 6px;
+      padding: 14px 16px; font-size: 12px; line-height: 1.7; color: #ffd9a0;
       position: relative; z-index: 2; text-align: left;
+      font-family: 'DotGothic16', 'MS Gothic', monospace;
+      box-shadow: 0 0 12px rgba(255, 153, 0, 0.45);
     }
+    .pending-banner b { color: #ffee00; }
     .pending-banner button {
-      margin-top: 10px; width: 100%; padding: 10px; border-radius: 20px;
-      border: none; background: var(--wedding-pink); color: #fff;
-      font-weight: 700; font-size: 12px; cursor: pointer;
+      margin-top: 10px; width: 100%; padding: 10px; border-radius: 5px;
+      border: 2px solid #ff9ae4; background: linear-gradient(180deg, #d81b8c 0%, #9c0f66 100%);
+      color: #fff; font-weight: 700; font-size: 12px; cursor: pointer;
+      font-family: 'DotGothic16', 'MS Gothic', monospace;
     }
     /* 恒久的に送れない写真を端末側へ救い出す導線。
        これが無いと、キュー内の写真は取り出す手段がありません。 */
     .pending-banner button.is-secondary {
-      background: #fff; color: #7a5a1e; border: 1px solid #dcb877;
+      background: rgba(0, 0, 0, 0.5); color: #ffee00; border: 2px solid #ffee00;
     }
     .pending-banner button.is-danger {
-      background: #fff; color: var(--danger); border: 1px solid var(--danger);
+      background: rgba(0, 0, 0, 0.5); color: #ff6b6b; border: 2px solid #ff4444;
       font-size: 11px; padding: 8px;
     }
     /* 1 回目のタップで確認状態にします（写真が消えるので誤タップ防止） */
@@ -652,10 +738,13 @@
     .modal-actions { padding: 12px 16px; display: flex; justify-content: flex-end; align-items: center; }
 
     /* 受付終了の案内 */
+    /* 受付終了の案内。表紙の中に出るので濃紺地に合わせます */
     .upload-closed-notice {
-      width: 100%; margin-bottom: 16px; padding: 12px 14px; border-radius: 12px;
-      background: #fdf0ef; border: 1px solid #eab9b6; color: #8c3a36;
+      width: 100%; margin-bottom: 16px; padding: 12px 14px; border-radius: 5px;
+      background: rgba(50, 8, 8, 0.9); border: 2px solid #ff4444; color: #ffc9c9;
       font-size: 12px; line-height: 1.7;
+      font-family: 'DotGothic16', 'MS Gothic', monospace;
+      box-shadow: 0 0 12px rgba(255, 68, 68, 0.45);
     }
     .upload-closed-notice[hidden] { display: none; }
     .btn-mode-select:disabled { opacity: 0.45; box-shadow: none; }
@@ -782,7 +871,9 @@
     @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
-<body>
+<!-- 表紙が最初に出る画面なので、あらかじめ濃紺にしておきます。JS で付けると
+     読み込み直後にクリーム色が一瞬見えます -->
+<body class="is-cover">
 
   <!-- アプリ内ブラウザ警告 -->
   <div id="inappWarning" class="inapp-warning">
@@ -825,21 +916,23 @@
   <div id="view-cover" class="view-screen active">
     <div class="cover-bg-overlay"></div>
     <div class="cover-content glass-panel">
-      <svg width="100" height="35" viewBox="0 0 100 35" aria-hidden="true" style="margin-bottom: 5px;">
-        <path d="M 35 25 C 20 25, 15 15, 10 10 C 20 15, 30 15, 35 25" fill="var(--wedding-gold)" opacity="0.5"/>
-        <path d="M 65 25 C 80 25, 85 15, 90 10 C 80 15, 70 15, 65 25" fill="var(--wedding-gold)" opacity="0.5"/>
-        <circle cx="45" cy="15" r="9" fill="none" stroke="var(--wedding-gold)" stroke-width="2"/>
-        <circle cx="55" cy="15" r="9" fill="none" stroke="var(--wedding-pink)" stroke-width="2"/>
-        <path d="M 45 4 L 45 9 M 42 6 L 48 6" stroke="var(--wedding-gold)" stroke-width="1.5"/>
-      </svg>
+      <div class="cover-stars" aria-hidden="true">★☆★☆★☆★☆★☆★☆★</div>
+
+      <!-- 誰の・いつの結婚式か。招待状サイトと同じ表記に揃えています -->
+      <p class="cover-couple">山下亜輝<span class="amp">＆</span>岡本美夏</p>
+      <p class="cover-date">2026年9月5日（土）</p>
+      <p class="cover-venue">東京會舘　12:15 挙式</p>
+
       <div class="cover-title">
         <h1>Wedding Camera</h1>
         <p>デジタル使い捨てカメラ</p>
       </div>
 
+      <div class="cover-stars is-bottom" aria-hidden="true">☆★☆★☆★☆★☆★☆★☆</div>
+
       <div class="cover-user-box">
         <span aria-hidden="true">👤</span> 投稿者:
-        <span id="displayUserName" style="font-family: 'Zen Maru Gothic', sans-serif;">未設定</span>
+        <span id="displayUserName" style="font-family: 'DotGothic16', 'MS Gothic', monospace;">未設定</span>
         <button class="edit-name-btn" data-action="edit-name">変更</button>
       </div>
 
@@ -865,8 +958,12 @@
       <button class="autosave-toggle" id="btnAutoSaveToggle" data-action="toggle-autosave"
               aria-pressed="true"></button>
 
-      <!-- 端末のカメラロールから選ぶための入力。ボタンから click() します -->
-      <input type="file" id="filePicker" accept="image/*,video/*" multiple hidden>
+      <!-- 端末のカメラロールから選ぶための入力。ボタンから click() します。
+           hidden（display:none）にしてはいけません。iOS Safari は表示されていない
+           ファイル入力の .click() でピッカーを開かないため、iPhone だけ
+           「押しても何も起きない」状態になります。 -->
+      <input type="file" id="filePicker" accept="image/*,video/*" multiple
+             class="file-input-offscreen" tabindex="-1" aria-hidden="true">
 
     </div>
 
@@ -3116,7 +3213,11 @@
   }
 
   function openPhotoPicker() {
-    if (!getUserName()) { askUserName(null); return; }
+    /* 名前が無いときは、登録が終わったらそのままピッカーを開きます。
+       旧版は askUserName(null) だったので、名前を入れても何も起きず、
+       もう一度ボタンを押す必要がありました。アルバム閲覧に名前が要らなくなったぶん、
+       名前未設定のままここへ来る人が増えるので、行き止まりにしません。 */
+    if (!getUserName()) { askUserName('pick'); return; }
     if (!state.uploadOpen) {
       toast(state.uploadClosedMessage || '写真の受付は終了しました。', 'error', 6000);
       return;
@@ -3136,6 +3237,8 @@
     let added = 0;
     let skipped = 0;
     let tooLarge = 0;
+    /** この端末で開けない形式（iPhone の HEIC など）。案内が変わるので別に数えます */
+    let unsupported = 0;
 
     try {
       for (let i = 0; i < files.length; i++) {
@@ -3143,7 +3246,10 @@
         const file = files[i];
         updateProgress('読み込んでいます… ' + (i + 1) + '/' + files.length, i / files.length);
 
-        const isVideo = /^video\//.test(file.type);
+        /* 「ファイル」アプリや iCloud 経由で選ぶと file.type が空になることがあります。
+           拡張子でも見ないと、動画を画像としてデコードしようとして失敗します。 */
+        const isVideo = /^video\//.test(file.type)
+          || /\.(mp4|mov|m4v|3gp|3gpp|webm|avi)$/i.test(file.name || '');
 
         try {
           let blob;
@@ -3170,7 +3276,12 @@
           added++;
         } catch (error) {
           console.warn('[pick] 読み込めませんでした', file.name, error.message);
-          skipped++;
+          /* HEIC / HEIF は iPhone の既定の保存形式です。ふつうは iOS が JPEG に
+             変換して渡してくれますが、「ファイル」アプリや iCloud 最適化の経路では
+             そのまま来ることがあり、ブラウザ側で開けません。
+             ただの失敗として扱うと打つ手が分からないので、別に案内します。 */
+          if (/\.(heic|heif)$/i.test(file.name || '') || /heic|heif/i.test(file.type)) unsupported++;
+          else skipped++;
         }
       }
     } finally {
@@ -3184,8 +3295,17 @@
     await refreshQueueCounts();
     updatePendingBanner();
 
+    /* HEIC は iPhone の既定の保存形式なので、「読み込めません」だけだと
+       打つ手が分かりません。設定の変え方まで書きます。 */
+    const HEIC_HINT = 'iPhone の写真（HEIC 形式）はこのブラウザで開けませんでした。'
+      + '「設定 → カメラ → フォーマット」を「互換性優先」にすると JPEG で保存され、'
+      + 'そのまま送れます。すでに撮った写真は、このアプリの「カメラを起動する」から'
+      + '撮り直すか、写真アプリで編集して保存し直すと送れます。';
+
     if (added === 0) {
-      if (tooLarge > 0) {
+      if (unsupported > 0) {
+        toast(HEIC_HINT, 'error', 14000);
+      } else if (tooLarge > 0) {
         toast('動画のサイズが大きすぎます（上限 '
           + Math.round(CONFIG.VIDEO_MAX_BYTES / 1048576) + 'MB）。短いものをお選びください。', 'error', 8000);
       } else {
@@ -3199,6 +3319,7 @@
     if (tooLarge > 0) message += ' ' + tooLarge + ' 本の動画は大きすぎるため除きました。';
     if (overflow > 0) message += ' 一度に選べるのは ' + CONFIG.PICK_MAX + ' 件までです。';
     toast(message, 'success', 7000);
+    if (unsupported > 0) toast(HEIC_HINT, 'error', 14000);
 
     processQueue();
   }
@@ -3819,6 +3940,10 @@
     state.currentView = target;
     // カメラ画面ではトーストを上へ退避させます（シャッターに重ねないため）
     document.body.classList.toggle('is-camera', target === 'camera');
+    /* 表紙だけ地色が濃紺です。html にも載せないと、iOS のバウンススクロールで
+       画面の上下にクリーム色（--paper）がはみ出して見えます */
+    document.body.classList.toggle('is-cover', target === 'cover');
+    document.documentElement.classList.toggle('is-cover', target === 'cover');
 
     if (target === 'camera') {
       els['view-camera'].classList.add('active');
@@ -3905,7 +4030,10 @@
 
     const target = state.pendingNavigation;
     state.pendingNavigation = null;
+    /* ここは「設定して次へ」のタップ（＝ユーザー操作）の中なので、
+       そのまま file input の click() を呼んでもブラウザに弾かれません。 */
     if (target === 'camera') openCameraWithFullscreen();
+    else if (target === 'pick') openPhotoPicker();
     else if (target) navigateTo(target);
   }
 
