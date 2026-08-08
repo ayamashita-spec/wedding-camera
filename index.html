@@ -13,7 +13,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="WedCam">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#faf8f5">
+  <!-- 起動直後に出る表紙とカメラが濃紺なので、その色に合わせます。
+       ここが白のままだと、起動時に一瞬だけ白い帯が出ます。 -->
+  <meta name="theme-color" content="#0a1040">
 
   <!-- ゲストの顔写真が集まるページなので、検索結果には出さないようにします。
        GitHub Pages はレスポンスヘッダを設定できないため meta で指定します。 -->
@@ -29,7 +31,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <!-- 会場の回線を考え、実際に使うウェイトだけに絞っています。
-       DotGothic16 は表紙だけで使う招待状サイトと同じドット書体です（1 ウェイトのみ）。
+       DotGothic16 は招待状サイトと同じドット書体で、表紙とカメラ画面で使います（1 ウェイトのみ）。
        display=swap なので、読めないうちは MS ゴシック等で先に表示されます。 -->
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,600&family=DotGothic16&family=Noto+Sans+JP:wght@400;700&family=Zen+Maru+Gothic:wght@500&display=swap" rel="stylesheet">
 
@@ -40,6 +42,18 @@
       --wedding-pink-deep: #c98a99;
       --insta-border: #dbdbdb;
       --danger: #d9534f;
+
+      /* 招待状サイト（yamashita-wedding.netlify.app）から採寸したネオン配色。
+         表紙とカメラ画面で共有します。アルバムは従来の白基調のままです
+         （写真そのものを見る画面なので、色を主張させません）。 */
+      --neon-bg: #0a1040;
+      --neon-panel: rgba(6, 9, 58, 0.78);
+      --neon-cyan: #00ccff;
+      --neon-yellow: #ffee00;
+      --neon-magenta: #ff44cc;
+      --neon-green: #00ee44;
+      --neon-text: #e0eeff;
+      --dot-font: 'DotGothic16', 'MS Gothic', monospace;
       --ink: #333;
       --paper: #faf8f5;
     }
@@ -294,11 +308,15 @@
     .pending-banner button:disabled { opacity: 0.55; }
 
     /* ── カメラ ─────────────────────────────────────────── */
+    /* カメラ画面も表紙のトンマナに合わせます。ただし下地の暗い半透明は残します。
+       カメラ映像は明るさが読めないので、塗りを薄くすると背景に溶けて操作が
+       見えなくなります。トンマナはネオンの枠・グロー・ドット書体で出します。 */
     #view-camera {
       position: fixed; top: 0; left: 0; width: 100vw;
       height: 100vh; height: 100dvh;
-      overflow: hidden; background: #000;
+      overflow: hidden; background: #06093a;
       touch-action: none; /* カメラ画面だけピンチ・スクロールを抑制 */
+      font-family: var(--dot-font);
     }
     .camera-container { width: 100%; height: 100%; position: relative; }
     #cameraVideo { width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
@@ -310,19 +328,27 @@
       position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
       color: #fff; font-size: 14px; line-height: 1.7; width: 100%; padding: 0 24px;
       white-space: pre-line;
+      /* 長い日本語の説明はドット書体だと読みにくいので、本文は通常の書体に戻します。
+         トンマナはボタンと枠で出します。 */
+      font-family: 'Noto Sans JP', sans-serif;
     }
     .camera-placeholder button {
-      margin-top: 18px; padding: 12px 24px; border-radius: 24px; border: none;
-      background: var(--wedding-pink); color: #fff; font-weight: 700; font-size: 13px; cursor: pointer;
+      margin-top: 18px; padding: 12px 24px; border-radius: 6px;
+      border: 2px solid #ff9ae4; font-family: var(--dot-font);
+      background: linear-gradient(180deg, #d81b8c 0%, #9c0f66 100%);
+      color: #fff; font-weight: 700; font-size: 13px; cursor: pointer;
+      box-shadow: 0 0 12px rgba(255, 68, 204, 0.6);
     }
 
     .camera-chip {
       position: absolute; top: calc(12px + env(safe-area-inset-top));
-      z-index: 25; padding: 8px 14px; border-radius: 20px;
-      background: rgba(0, 0, 0, 0.55);
+      z-index: 25; padding: 8px 14px; border-radius: 5px;
+      background: var(--neon-panel);
       backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(255, 255, 255, 0.3); color: #fff;
+      border: 1px solid var(--neon-cyan); color: var(--neon-cyan);
+      box-shadow: 0 0 8px rgba(0, 204, 255, 0.45);
       font-size: 11px; font-weight: 700; cursor: pointer;
+      font-family: var(--dot-font); letter-spacing: 1px;
       display: flex; align-items: center; gap: 5px;
       -webkit-tap-highlight-color: transparent;
     }
@@ -337,7 +363,7 @@
       position: absolute; bottom: 0; left: 0; right: 0; z-index: 20;
       padding: 15px 20px calc(15px + env(safe-area-inset-bottom)) 20px;
       display: flex; flex-direction: column; align-items: center;
-      background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%);
+      background: linear-gradient(to top, rgba(6,9,58,0.88) 0%, rgba(6,9,58,0) 100%);
     }
     .camera-controls {
       display: flex; justify-content: center; align-items: center; gap: 30px;
@@ -348,11 +374,14 @@
          .camera-controls-overlay になり、リングがシャッターではなく
          操作パネル全体を囲みます。 */
       position: relative;
-      width: 80px; height: 80px; border-radius: 50%; background: #fff;
-      border: 4px solid var(--wedding-pink); display: flex; flex-direction: column;
+      width: 80px; height: 80px; border-radius: 50%;
+      /* 塗りは白のままにします。カメラ映像の明るさは読めないので、暗くすると
+         明るい被写体の前でシャッターが消えます。トンマナは枠とグローで出します。 */
+      background: #fff;
+      border: 4px solid var(--neon-magenta); display: flex; flex-direction: column;
       align-items: center; justify-content: center; padding: 0;
-      box-shadow: 0 0 25px rgba(223, 168, 180, 0.6);
-      color: var(--wedding-pink-deep); cursor: pointer; transition: transform 0.1s;
+      box-shadow: 0 0 22px rgba(255, 68, 204, 0.75);
+      color: #b3106f; cursor: pointer; transition: transform 0.1s;
       -webkit-tap-highlight-color: transparent;
     }
     .shutter-btn-visual:active { transform: scale(0.90); }
@@ -376,21 +405,28 @@
     /* ── 写真 / 動画の切り替え ───────────────────────────── */
     .mode-switch {
       display: flex; gap: 4px; padding: 3px; margin-bottom: 12px;
-      background: rgba(0, 0, 0, 0.5); border-radius: 20px;
-      border: 1px solid rgba(255, 255, 255, 0.25);
+      background: var(--neon-panel); border-radius: 6px;
+      border: 1px solid var(--neon-cyan);
+      box-shadow: 0 0 8px rgba(0, 204, 255, 0.4);
     }
     .mode-switch button {
-      background: none; border: none; color: rgba(255, 255, 255, 0.75);
-      font-size: 11px; font-weight: 700; padding: 6px 16px; border-radius: 16px;
+      background: none; border: none; color: var(--neon-text);
+      font-size: 11px; font-weight: 700; padding: 6px 16px; border-radius: 4px;
       cursor: pointer; -webkit-tap-highlight-color: transparent;
+      font-family: var(--dot-font);
     }
-    .mode-switch button.is-active { background: #fff; color: #333; }
+    /* 選択中はネオンで塗り、文字を濃紺に。映像の上でも判別できます */
+    .mode-switch button.is-active {
+      background: var(--neon-cyan); color: #06093a;
+      box-shadow: 0 0 10px rgba(0, 204, 255, 0.7);
+    }
     .mode-switch[hidden] { display: none; }
 
-    /* 録画中の残り時間 */
+    /* 録画中の残り時間。赤は「録画中」の意味を持つので配色は変えません */
     .rec-timer {
       display: none; align-items: center; gap: 6px; margin-bottom: 8px;
       color: #fff; font-size: 12px; font-weight: 700;
+      font-family: var(--dot-font);
       text-shadow: 0 2px 4px rgba(0,0,0,0.8);
     }
     .rec-timer.is-visible { display: flex; }
@@ -420,13 +456,15 @@
     .shutter-icon { font-size: 30px; line-height: 1; }
     .shutter-label {
       font-size: 9px; font-weight: 700; letter-spacing: 1px;
-      font-family: 'Zen Maru Gothic', sans-serif;
+      font-family: var(--dot-font);
     }
 
     .switch-cam-btn {
-      background: rgba(255, 255, 255, 0.25);
+      /* 白の半透明だと明るい被写体の前で消えます。濃紺地＋シアン枠にします */
+      background: var(--neon-panel);
       backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.4); color: #fff; border-radius: 50%;
+      border: 1px solid var(--neon-cyan); color: var(--neon-cyan); border-radius: 50%;
+      box-shadow: 0 0 8px rgba(0, 204, 255, 0.45);
       width: 44px; height: 44px; font-size: 18px; cursor: pointer;
       display: flex; align-items: center; justify-content: center;
       -webkit-tap-highlight-color: transparent;
@@ -442,8 +480,8 @@
     }
     .recent-shot {
       position: relative; width: 44px; height: 44px; border-radius: 8px;
-      overflow: hidden; border: 2px solid rgba(255,255,255,0.85);
-      box-shadow: 0 2px 8px rgba(0,0,0,0.4); flex: none;
+      overflow: hidden; border: 2px solid var(--neon-cyan);
+      box-shadow: 0 0 8px rgba(0, 204, 255, 0.5); flex: none;
       animation: shotIn 0.25s ease-out;
     }
     @keyframes shotIn { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: scale(1); } }
@@ -475,8 +513,9 @@
     }
 
     #status {
-      font-family: 'Zen Maru Gothic', sans-serif; font-size: 12px; margin-top: 10px;
-      color: #fff; min-height: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+      font-family: var(--dot-font); font-size: 12px; margin-top: 10px;
+      color: var(--neon-text); min-height: 18px; font-weight: 700;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.9);
     }
     #status.is-error { color: #ffb3b3; }
 
@@ -521,23 +560,28 @@
     }
     .camera-hint {
       display: none; align-items: flex-start; gap: 8px;
-      padding: 10px 12px; border-radius: 12px;
-      background: rgba(0, 0, 0, 0.62);
+      padding: 10px 12px; border-radius: 5px;
+      background: var(--neon-panel);
       backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.22);
-      color: #fff; font-size: 11px; line-height: 1.6; text-align: left;
+      border: 1px solid var(--neon-green);
+      box-shadow: 0 0 10px rgba(0, 238, 68, 0.35);
+      color: var(--neon-text); font-size: 11px; line-height: 1.7; text-align: left;
+      font-family: var(--dot-font);
       pointer-events: auto;
     }
     .camera-hint.is-visible { display: flex; }
-    .camera-hint p { margin: 0; flex: 1; }
+    /* 案内の本文は手順を読ませる文章なので、11px のドット書体では厳しく、
+       通常の書体に戻します。枠の色とボタンでトンマナは保ちます。 */
+    .camera-hint p { margin: 0; flex: 1; font-family: 'Noto Sans JP', sans-serif; }
     .camera-hint .hint-close {
       background: none; border: none; color: #fff; opacity: 0.7;
       font-size: 16px; line-height: 1; padding: 2px 4px; cursor: pointer; flex: none;
     }
     .camera-hint .hint-action {
-      background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.4);
-      color: #fff; border-radius: 14px; padding: 5px 10px; margin-top: 6px;
+      background: rgba(0, 0, 0, 0.45); border: 1px solid var(--neon-green);
+      color: var(--neon-green); border-radius: 4px; padding: 5px 10px; margin-top: 6px;
       font-size: 11px; font-weight: 700; cursor: pointer;
+      font-family: var(--dot-font);
     }
     @media (orientation: landscape) {
       /* 横向きは overlay が画面右の縦帯になるので、--controls-h は使いません */
@@ -558,14 +602,23 @@
     .queue-status-badge {
       position: fixed; top: calc(10px + env(safe-area-inset-top));
       left: 50%; transform: translateX(-50%);
-      z-index: 90; padding: 6px 14px; border-radius: 20px;
-      background: rgba(223, 168, 180, 0.95);
+      z-index: 90; padding: 6px 14px; border-radius: 5px;
+      /* 表紙にもカメラ映像の上にも出るので、地は濃紺で固定します */
+      background: rgba(6, 9, 58, 0.92);
+      border: 1px solid var(--neon-cyan);
+      box-shadow: 0 0 10px rgba(0, 204, 255, 0.5);
       backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-      color: #fff; font-size: 10px; font-weight: 700; display: none;
-      align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+      color: var(--neon-text); font-size: 10px; font-weight: 700; display: none;
+      font-family: var(--dot-font);
+      align-items: center; gap: 6px;
       white-space: nowrap;
     }
-    .queue-status-badge.is-warning { background: rgba(217, 83, 79, 0.95); }
+    /* 警告のときだけ赤にします（色に意味を持たせている箇所は変えません） */
+    .queue-status-badge.is-warning {
+      background: rgba(60, 8, 8, 0.94);
+      border-color: #ff4444; color: #ffc9c9;
+      box-shadow: 0 0 10px rgba(255, 68, 68, 0.5);
+    }
     /* 送信中は流れる縞を重ねます。GAS 相手では送信バイト数が取れないため、
        進捗率を装う代わりに「動いている」ことだけを示す不確定表示にします。 */
     .queue-status-badge.is-sending {
@@ -812,6 +865,51 @@
       border: 1px solid rgba(255,255,255,0.9);
     }
     .privacy-note { font-size: 10.5px; color: #8a8a8a; line-height: 1.6; margin-bottom: 18px; }
+
+    /* ── 名前登録モーダル ───────────────────────────────
+       表紙とカメラの間に挟まる画面なので、ここだけ白いと切り替わりが目立ちます。
+       アルバム側のモーダルは白のままにしたいので #nameModal に限定しています。 */
+    #nameModal .name-panel {
+      padding: 34px 24px;
+      background: var(--neon-panel);
+      border: 1px solid var(--neon-cyan);
+      box-shadow: 0 0 0 1px rgba(0, 204, 255, 0.25), 0 12px 40px rgba(0, 0, 0, 0.5);
+      font-family: var(--dot-font);
+      color: var(--neon-text);
+    }
+    #nameModal .name-panel-mark { font-size: 36px; line-height: 1; }
+    /* ドット書体は見出しとボタンだけにします。同意の文面や説明を 10〜13px の
+       ドット書体で出すと読み取りづらく、ここは読んでもらう必要がある文章です。 */
+    #nameModal .message-box,
+    #nameModal .privacy-note,
+    #nameModal .name-input-field,
+    #nameModal .name-input-hint { font-family: 'Noto Sans JP', sans-serif; }
+    #nameModal .name-panel-title {
+      font-family: var(--dot-font); font-size: 22px; margin: 6px 0 18px;
+      color: var(--neon-yellow); letter-spacing: 0.08em;
+      text-shadow: 0 0 10px rgba(255, 238, 0, 0.55);
+    }
+    #nameModal .message-box {
+      background: rgba(0, 0, 0, 0.28); border: 1px solid rgba(0, 204, 255, 0.45);
+      color: var(--neon-text);
+    }
+    #nameModal .message-box b { color: var(--neon-cyan); }
+    #nameModal .name-input-field {
+      background: #f4f8ff; color: #10143c; border-color: var(--neon-cyan);
+    }
+    #nameModal .name-input-field:focus { border-color: var(--neon-yellow); background: #fff; }
+    #nameModal .name-input-field::placeholder { color: #6b7392; }
+    /* 白地に薄いグレーだと濃紺のパネル上で読めないので、明るい色に上書きします */
+    #nameModal .name-input-hint { color: #b9c8e8; }
+    #nameModal .name-input-hint.is-error { color: #ff8a8a; }
+    #nameModal .privacy-note { color: #b9c8e8; }
+    #nameModal .privacy-note b { color: var(--neon-yellow); }
+    #nameModal .name-submit-btn {
+      background: var(--neon-magenta); color: #200018;
+      box-shadow: 0 0 18px rgba(255, 68, 204, 0.5);
+      font-family: var(--dot-font); letter-spacing: 0.06em;
+    }
+    #nameModal .btn-text-link { color: #b9c8e8; }
 
     /* ── 進捗オーバーレイ ───────────────────────────────── */
     .progress-overlay {
@@ -1146,11 +1244,9 @@
 
   <!-- ══ 名前登録モーダル ══════════════════════════════ -->
   <div id="nameModal" class="modal" data-close-on-backdrop>
-    <div class="modal-content-wrapper glass-panel" style="padding: 34px 24px; background: #fff;">
-      <div style="font-size: 36px; line-height: 1;" aria-hidden="true">💌</div>
-      <h2 style="font-family: 'Cormorant Garamond', serif; font-size: 24px; color: var(--wedding-gold); margin: 6px 0 18px;">
-        Welcome!
-      </h2>
+    <div class="modal-content-wrapper glass-panel name-panel">
+      <div class="name-panel-mark" aria-hidden="true">💌</div>
+      <h2 class="name-panel-title">Welcome!</h2>
 
       <div class="message-box">
         撮った写真は、ゲスト全員が見られる<b>共有アルバム</b>に入ります📸<br><br>

@@ -13,7 +13,7 @@
  *   当日の緊急修正が反映されないと困るため、通信があれば必ず新しい方を使います。
  */
 
-const CACHE_NAME = 'wedcam-shell-v4';
+const CACHE_NAME = 'wedcam-shell-v5';
 
 /**
  * opaque レスポンスでもキャッシュを許すホスト。
