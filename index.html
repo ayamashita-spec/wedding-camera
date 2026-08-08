@@ -122,7 +122,10 @@
       border: 0; padding: 0; margin: 0;
     }
 
-    .view-screen { display: none; width: 100%; min-height: 100dvh; }
+    /* dvh を解釈できない古い iOS は宣言ごと捨てるため、必ず vh を先に書きます。
+       これが無いと #view-camera の高さが auto になり、プレビューが帯状に潰れて
+       操作パネルが画面外へ飛びます（375x667 で 371x148 まで縮むのを実測）。 */
+    .view-screen { display: none; width: 100%; min-height: 100vh; min-height: 100dvh; }
     .view-screen.active { display: flex; animation: fadeIn 0.35s ease-out; }
     @keyframes fadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
 
@@ -183,7 +186,6 @@
       background: rgba(255, 68, 204, 0.14);
       box-shadow: 0 0 10px rgba(255, 68, 204, 0.6);
     }
-    .cover-venue { margin: 0 0 14px; font-size: 11px; color: #88aacc; letter-spacing: 1px; }
 
     .cover-title h1 {
       margin: 10px 0 0; font-size: 25px; color: #00ccff;
@@ -293,7 +295,8 @@
 
     /* ── カメラ ─────────────────────────────────────────── */
     #view-camera {
-      position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
+      position: fixed; top: 0; left: 0; width: 100vw;
+      height: 100vh; height: 100dvh;
       overflow: hidden; background: #000;
       touch-action: none; /* カメラ画面だけピンチ・スクロールを抑制 */
     }
@@ -341,6 +344,10 @@
       width: 100%; max-width: 320px;
     }
     .shutter-btn-visual {
+      /* 録画リング（.shutter-ring）の絶対配置の基準。これが無いと基準が
+         .camera-controls-overlay になり、リングがシャッターではなく
+         操作パネル全体を囲みます。 */
+      position: relative;
       width: 80px; height: 80px; border-radius: 50%; background: #fff;
       border: 4px solid var(--wedding-pink); display: flex; flex-direction: column;
       align-items: center; justify-content: center; padding: 0;
@@ -356,7 +363,8 @@
       box-shadow: 0 0 25px rgba(217, 83, 79, 0.7);
     }
     .shutter-ring {
-      position: absolute; inset: -4px; border-radius: 50%;
+      position: absolute; top: -4px; right: -4px; bottom: -4px; left: -4px;
+      border-radius: 50%;
       pointer-events: none; display: none;
     }
     .shutter-btn-visual.is-recording .shutter-ring { display: block; }
@@ -406,7 +414,7 @@
          16:9 固定だと、スマホで縦に構えて撮った動画（9:16）が枠のごく一部にしか
          映りません。縦横どちらでも大きく映る 3:4 を既定にします。 */
       aspect-ratio: 3 / 4;
-      max-height: 70dvh;
+      max-height: 70vh; max-height: 70dvh;
     }
     .modal-video-wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
     .shutter-icon { font-size: 30px; line-height: 1; }
@@ -447,7 +455,7 @@
     }
     /* 送信中は少し暗く、完了したらチェックを出します */
     .recent-shot::after {
-      content: ''; position: absolute; inset: 0;
+      content: ''; position: absolute; top: 0; right: 0; bottom: 0; left: 0;
       background: rgba(0,0,0,0.45); transition: opacity 0.3s;
     }
     .recent-shot.is-sent::after {
@@ -541,7 +549,7 @@
     }
 
     #flashEffect {
-      position: fixed; inset: 0; background: #fff;
+      position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: #fff;
       z-index: 9990; opacity: 0; pointer-events: none; transition: opacity 0.4s ease-out;
     }
     #flashEffect.flash-active { opacity: 1; transition: opacity 0.05s ease-out; }
@@ -598,7 +606,10 @@
     /* ヘッダーと選択ツールバーは 1 つの sticky にまとめます。
        それぞれ個別に sticky top:0 にすると同じ位置に重なり、
        z-index の低いツールバーがヘッダーの下に潜って見えなくなります。 */
-    .album-sticky-head { position: sticky; top: 0; left: 0; width: 100%; z-index: 50; }
+    .album-sticky-head {
+      position: -webkit-sticky; position: sticky;
+      top: 0; left: 0; width: 100%; z-index: 50;
+    }
     .album-header-bar {
       width: 100%;
       /* safe-area は padding-top に入れます。旧版は bottom に入っていたため
@@ -657,9 +668,20 @@
     }
     .grid-item:active img { opacity: 0.8; }
     .grid-item.is-broken::after {
-      content: '読み込めません'; position: absolute; inset: 0;
+      content: '読み込めません'; position: absolute; top: 0; right: 0; bottom: 0; left: 0;
       display: flex; align-items: center; justify-content: center;
       font-size: 9px; color: #999; background: #f4f4f4;
+    }
+
+    /* aspect-ratio を解釈できない古い iOS 向け。無いとタイルの高さが
+       画像なりになり、3 列グリッドの行がガタつきます（潰れはしません）。
+       padding-bottom の百分率は「親要素の幅」に対する比なので正方形になります。 */
+    @supports not (aspect-ratio: 1 / 1) {
+      .grid-item { height: 0; padding-bottom: 100%; }
+      .grid-item img { position: absolute; top: 0; left: 0; }
+      /* 3:4 の枠。4 / 3 * 100% = 133.33% */
+      .modal-video-wrap { height: 0; padding-bottom: 133.33%; }
+      .modal-video-wrap iframe { position: absolute; top: 0; left: 0; }
     }
 
     .select-checkbox {
@@ -707,14 +729,15 @@
 
     /* ── モーダル共通 ───────────────────────────────────── */
     .modal {
-      display: none; position: fixed; inset: 0; z-index: 9500;
+      display: none; position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 9500;
       background-color: rgba(0,0,0,0.85);
       backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
     }
     .modal.is-open { display: block; }
     .modal-content-wrapper {
       position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      width: 90%; max-width: 450px; max-height: 90dvh; overflow-y: auto;
+      width: 90%; max-width: 450px; overflow-y: auto;
+      max-height: 90vh; max-height: 90dvh;
       background: #fff; border-radius: 16px;
     }
     .modal-header {
@@ -734,7 +757,10 @@
        これが無いと動画を開いたときに els.modalImgWrap.hidden = true が効かず、
        高さ 200px の空っぽの箱が動画の上に残り続けます（.sheet-option と同じ罠）。 */
     .modal-img-container[hidden], .modal-video-wrap[hidden] { display: none; }
-    .modal-img-container img { width: 100%; max-height: 60dvh; object-fit: contain; display: block; }
+    .modal-img-container img {
+      width: 100%; object-fit: contain; display: block;
+      max-height: 60vh; max-height: 60dvh;
+    }
     .modal-actions { padding: 12px 16px; display: flex; justify-content: flex-end; align-items: center; }
 
     /* 受付終了の案内 */
@@ -789,7 +815,7 @@
 
     /* ── 進捗オーバーレイ ───────────────────────────────── */
     .progress-overlay {
-      display: none; position: fixed; inset: 0;
+      display: none; position: fixed; top: 0; right: 0; bottom: 0; left: 0;
       background: rgba(255, 255, 255, 0.94);
       backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
       z-index: 9700; flex-direction: column; align-items: center; justify-content: center;
@@ -807,7 +833,7 @@
 
     /* ── アプリ内ブラウザ警告 ───────────────────────────── */
     .inapp-warning {
-      display: none; position: fixed; inset: 0;
+      display: none; position: fixed; top: 0; right: 0; bottom: 0; left: 0;
       background: rgba(0,0,0,0.9); z-index: 9900; color: #fff; padding: 30px 20px;
       flex-direction: column; align-items: center; justify-content: center;
     }
@@ -816,7 +842,7 @@
 
     /* ── ボトムシート ───────────────────────────────────── */
     .sheet-backdrop {
-      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+      display: none; position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,0.55);
       z-index: 9600; align-items: flex-end; justify-content: center;
     }
     .sheet-backdrop.is-open { display: flex; }
@@ -826,7 +852,8 @@
       animation: slideUp 0.25s ease-out;
       /* 親は flex-end で下寄せなので、内容がビューポートより高いとはみ出しは上方向に
          出て到達できなくなります（横向きや文字拡大時）。枠内でスクロールさせます。 */
-      max-height: calc(100dvh - 24px); overflow-y: auto;
+      overflow-y: auto;
+      max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px);
     }
     @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
     .sheet h2 { font-size: 15px; margin: 0 0 4px; color: #333; }
@@ -903,6 +930,14 @@
 
   <div id="flashEffect" aria-hidden="true"></div>
 
+  <!-- 端末のカメラロールから選ぶための入力。ボタンから click() します。
+       ここは body 直下でなければいけません。
+        - hidden（display:none）にすると iOS Safari が .click() を無視します
+        - 画面（.view-screen）の中に置くと、その画面が非表示のとき祖先ごと
+          display:none になり、同じ理由でピッカーが開かなくなります -->
+  <input type="file" id="filePicker" accept="image/*,video/*" multiple
+         class="file-input-offscreen" tabindex="-1" aria-hidden="true">
+
   <!-- 同期バッジ：カメラ / アルバムどちらにいても見えるよう body 直下に置いています -->
   <div class="queue-status-badge" id="queueBadge">
     <span class="queue-spinner" id="queueSpinner" aria-hidden="true"></span>
@@ -921,7 +956,6 @@
       <!-- 誰の・いつの結婚式か。招待状サイトと同じ表記に揃えています -->
       <p class="cover-couple">山下亜輝<span class="amp">＆</span>岡本美夏</p>
       <p class="cover-date">2026年9月5日（土）</p>
-      <p class="cover-venue">東京會舘　12:15 挙式</p>
 
       <div class="cover-title">
         <h1>Wedding Camera</h1>
@@ -957,13 +991,6 @@
       <!-- 撮るたびに端末へ落とすかの切り替え。ダウンロード通知が多いと感じたら切れます -->
       <button class="autosave-toggle" id="btnAutoSaveToggle" data-action="toggle-autosave"
               aria-pressed="true"></button>
-
-      <!-- 端末のカメラロールから選ぶための入力。ボタンから click() します。
-           hidden（display:none）にしてはいけません。iOS Safari は表示されていない
-           ファイル入力の .click() でピッカーを開かないため、iPhone だけ
-           「押しても何も起きない」状態になります。 -->
-      <input type="file" id="filePicker" accept="image/*,video/*" multiple
-             class="file-input-offscreen" tabindex="-1" aria-hidden="true">
 
     </div>
 
@@ -3691,6 +3718,13 @@
   function describeCameraError(error) {
     const name = error && error.name;
     if (name === 'NotAllowedError' || name === 'SecurityError') {
+      /* アプリ内ブラウザにはアドレスバーも 🔒 もありません。起動時の警告を
+         「このまま続ける」で閉じた人はここに来るので、出口をもう一度示します。 */
+      if (isInAppBrowser()) {
+        return isIos()
+          ? 'このアプリの中のブラウザではカメラを使えないことがあります。\n画面下の共有ボタン（□に↑）→「Safari で開く」からもう一度開いてください。'
+          : 'このアプリの中のブラウザではカメラを使えないことがあります。\n画面右上の「⋮」→「ブラウザで開く」からもう一度開いてください。';
+      }
       return 'カメラの使用が許可されていません。\nブラウザのアドレスバー横の🔒からカメラを「許可」にして、もう一度お試しください。';
     }
     if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
@@ -4648,14 +4682,20 @@
     return /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
   }
 
-  function checkInAppBrowser() {
+  /** LINE などのアプリ内ブラウザか。判定は 1 か所に置き、案内文でも使い回します */
+  function isInAppBrowser() {
     const ua = navigator.userAgent || navigator.vendor || '';
     const patterns = [
       /Line\//i, /FBAN|FBAV|FB_IAB/i, /Instagram/i, /Twitter/i, /MicroMessenger/i,
       /TikTok/i, /Threads/i,
       /; wv\)/i // Android の汎用 WebView
     ];
-    if (!patterns.some((pattern) => pattern.test(ua))) return;
+    return patterns.some((pattern) => pattern.test(ua));
+  }
+
+  function checkInAppBrowser() {
+    const ua = navigator.userAgent || navigator.vendor || '';
+    if (!isInAppBrowser()) return;
 
     // 共有ボタンの位置は OS で違います（iOS は画面下、Android は右上の ⋮）
     const isAndroid = /Android/i.test(ua);
