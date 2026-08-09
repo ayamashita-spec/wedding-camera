@@ -44,8 +44,7 @@
       --danger: #d9534f;
 
       /* 招待状サイト（yamashita-wedding.netlify.app）から採寸したネオン配色。
-         表紙とカメラ画面で共有します。アルバムは従来の白基調のままです
-         （写真そのものを見る画面なので、色を主張させません）。 */
+         表紙・カメラ・アルバムの 3 画面すべてで共有します。 */
       --neon-bg: #0a1040;
       --neon-panel: rgba(6, 9, 58, 0.78);
       --neon-cyan: #00ccff;
@@ -53,6 +52,13 @@
       --neon-magenta: #ff44cc;
       --neon-green: #00ee44;
       --neon-text: #e0eeff;
+      /* 濃紺の上に置く控えめな文字（説明文・補足）。--neon-text より一段落とします */
+      --neon-text-dim: #b9c8e8;
+      /* 濃紺の面を区切る線。白基調の --insta-border の置き換えです */
+      --neon-line: rgba(0, 204, 255, 0.3);
+      /* 写真タイルの地。ページの地（--neon-bg）より少し明るくして、
+         object-fit: contain の余白がタイルとして見えるようにします */
+      --neon-tile: #0e1550;
       --dot-font: 'DotGothic16', 'MS Gothic', monospace;
       --ink: #333;
       --paper: #faf8f5;
@@ -63,8 +69,12 @@
       width: 100%; min-height: 100%;
       margin: 0; padding: 0;
       font-family: 'Noto Sans JP', sans-serif;
-      text-align: center; color: var(--ink);
-      background-color: var(--paper);
+      text-align: center;
+      /* 3 画面とも濃紺になったので、地色と既定の文字色も濃紺側に合わせます。
+         地色は iOS のバウンススクロールで画面の上下にはみ出して見える色です。
+         既定を暗いままにすると、色を指定していない要素が濃紺に沈んで消えます。 */
+      color: var(--neon-text);
+      background-color: var(--neon-bg);
       -webkit-touch-callout: none;
     }
 
@@ -78,16 +88,17 @@
        - clip 非対応の旧 Safari では body は visible に戻り、html 側の hidden が効きます */
     html { overflow-x: hidden; }
     body { overflow-x: clip; }
-    /* 表紙は濃紺。html にも載せるのは、iOS のバウンススクロールではみ出して見えるのが
-       html の背景だからです（html と body の両方に地色があるので伝播は起きません）。
-       アルバムとカメラは従来どおりです。 */
-    html.is-cover, body.is-cover { background-color: #0a1040; }
+    /* 地色は上の html, body で濃紺にしていますが、表紙は明示的にも持たせておきます。
+       表紙だけは初期表示（JS が動く前）から濃紺である必要があるためです。 */
+    html.is-cover, body.is-cover { background-color: var(--neon-bg); }
 
     button { font-family: inherit; }
     button:focus-visible,
     [role="button"]:focus-visible,
     input:focus-visible {
-      outline: 3px solid var(--wedding-pink-deep);
+      /* 濃紺の地の上でも、明るい写真タイルの上でも見えるよう黄にします
+         （旧 --wedding-pink-deep は濃紺の上で沈みます）。 */
+      outline: 3px solid var(--neon-yellow);
       outline-offset: 2px;
     }
     @media (prefers-reduced-motion: reduce) {
@@ -149,8 +160,9 @@
          地       #0a1040   見出し   #00ccff（シアン）
          名前     #ffee00   日付枠   #ff44cc（マゼンタ）
          補助     #00ee44   本文     #e0eeff
-       この指定は表紙の中だけに閉じています。カメラ画面とアルバムは従来のまま
-       （撮る・見る・保存するの導線を変えないため）。 */
+       この配色は表紙・カメラ・アルバムの 3 画面で共有します。ドット書体は見出し・
+       ボタン・ラベルだけに使い、説明文や同意文は通常の書体のままにしています
+       （10〜13px のドット書体は読み取りづらいため）。 */
     #view-cover {
       flex-direction: column; align-items: center; justify-content: center;
       padding: 30px 20px;
@@ -652,9 +664,14 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── アルバム ───────────────────────────────────────── */
+    /* ── アルバム ─────────────────────────────────────────
+       表紙・カメラと同じ濃紺ネオンに揃えます。ただしドット書体は見出し・ボタン・
+       ラベルだけに使い、説明文や件数の文章は通常の書体のままにします
+       （10〜13px のドット書体は読み取りづらいため）。
+       写真そのものの上に重なる要素（選択チェック・動画バッジ）は、写真の明るさが
+       予測できないので塗りを薄くせず、白枠と濃い地で確保します。 */
     #view-album {
-      flex-direction: column; width: 100%; background: #fff; padding-bottom: 100px;
+      flex-direction: column; width: 100%; background: var(--neon-bg); padding-bottom: 100px;
     }
     /* ヘッダーと選択ツールバーは 1 つの sticky にまとめます。
        それぞれ個別に sticky top:0 にすると同じ位置に重なり、
@@ -669,45 +686,63 @@
          ノッチ機で見出しがステータスバーに食い込んでいました。 */
       padding: calc(10px + env(safe-area-inset-top)) 14px 10px 14px;
       display: flex; justify-content: space-between; align-items: center;
-      background: rgba(255,255,255,0.94);
+      /* スクロールした写真が透けて見えるので、地は不透明寄りにします */
+      background: rgba(6, 9, 58, 0.94);
       backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-      border-bottom: 1px solid var(--insta-border);
+      border-bottom: 1px solid var(--neon-line);
     }
     .btn-album-back {
-      background: #f0f0f0; border: none; color: #333; font-size: 12px;
-      font-weight: 700; cursor: pointer; padding: 8px 14px; border-radius: 15px;
+      background: var(--neon-panel); border: 1px solid var(--neon-cyan); color: var(--neon-cyan);
+      box-shadow: 0 0 8px rgba(0, 204, 255, 0.4);
+      font-size: 12px; font-family: var(--dot-font); letter-spacing: 1px;
+      font-weight: 700; cursor: pointer; padding: 8px 14px; border-radius: 5px;
     }
     .album-header-right { display: flex; align-items: center; gap: 8px; }
     .btn-icon-round {
-      background: #f0f0f0; border: none; width: 32px; height: 32px; border-radius: 50%;
+      background: var(--neon-panel); border: 1px solid var(--neon-cyan); color: var(--neon-cyan);
+      box-shadow: 0 0 8px rgba(0, 204, 255, 0.4);
+      width: 32px; height: 32px; border-radius: 50%;
       font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center;
     }
-    .btn-icon-round:disabled { opacity: 0.4; }
+    /* 無効は薄さで示しますが、濃紺の地では薄めすぎると「消えた」ように見えます。
+       押せないと分かる程度に落としつつ、そこに在ることは見える濃さにします。 */
+    .btn-icon-round:disabled { opacity: 0.55; }
     .btn-select-toggle {
-      background: #fff; border: 1.5px solid var(--wedding-pink); color: var(--wedding-pink-deep);
-      padding: 7px 12px; border-radius: 15px; font-size: 12px; font-weight: 700; cursor: pointer;
+      background: var(--neon-panel); border: 1px solid var(--neon-cyan); color: var(--neon-cyan);
+      box-shadow: 0 0 8px rgba(0, 204, 255, 0.4);
+      padding: 7px 12px; border-radius: 5px; font-size: 12px; font-weight: 700; cursor: pointer;
+      font-family: var(--dot-font); letter-spacing: 1px;
     }
-    .btn-select-toggle.active { background: var(--wedding-pink); color: #fff; }
+    /* 選択モード中はネオンで塗り、文字を濃紺に。オン/オフが一目で分かります */
+    .btn-select-toggle.active {
+      background: var(--neon-cyan); color: #06093a;
+      box-shadow: 0 0 12px rgba(0, 204, 255, 0.75);
+    }
 
     .selection-toolbar {
       display: none; justify-content: space-between; align-items: center;
-      padding: 10px 16px; background: var(--paper); border-bottom: 1px solid var(--insta-border);
-      font-size: 12px; color: #555; font-weight: 700;
+      padding: 10px 16px; background: rgba(6, 9, 58, 0.94); border-bottom: 1px solid var(--neon-line);
+      font-size: 12px; color: var(--neon-text); font-weight: 700;
+      font-family: var(--dot-font);
     }
     .selection-toolbar-btns { display: flex; gap: 14px; }
     .btn-sub-action {
-      background: none; border: none; color: var(--wedding-gold);
+      background: none; border: none; color: var(--neon-yellow);
       font-weight: 700; cursor: pointer; font-size: 12px; padding: 4px;
+      font-family: var(--dot-font);
     }
 
     .album-container { max-width: 600px; width: 100%; margin: 0 auto; }
     .insta-grid {
       display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
-      width: 100%; background: var(--insta-border);
+      /* 隙間から透けるこの色だけが、隣り合う写真の境目です。--neon-line（0.3）を
+         使うと暗い写真どうしで 2.22:1 しか出ずつながって見えるので、ここは
+         濃いめの実値にします（--neon-line を上げると枠線全体が明るくなるため）。 */
+      width: 100%; background: rgba(0, 204, 255, 0.55);
     }
 
     .grid-item {
-      background: #f4f4f4; cursor: pointer; position: relative;
+      background: var(--neon-tile); cursor: pointer; position: relative;
       width: 100%; aspect-ratio: 1 / 1; overflow: hidden; border: none; padding: 0;
       -webkit-tap-highlight-color: transparent;
     }
@@ -723,7 +758,7 @@
     .grid-item.is-broken::after {
       content: '読み込めません'; position: absolute; top: 0; right: 0; bottom: 0; left: 0;
       display: flex; align-items: center; justify-content: center;
-      font-size: 9px; color: #999; background: #f4f4f4;
+      font-size: 9px; color: var(--neon-text-dim); background: var(--neon-tile);
     }
 
     /* aspect-ratio を解釈できない古い iOS 向け。無いとタイルの高さが
@@ -737,47 +772,74 @@
       .modal-video-wrap iframe { position: absolute; top: 0; left: 0; }
     }
 
+    /* 写真そのものの上に載るので、写真の明るさが予測できない前提で組みます。
+       未選択の地が黒 30% だと明るい写真の上で白い ✓ が 2.11:1 まで落ちて読めません。
+       濃紺 88% にすると、白飛びした写真の上でも暗い写真の上でも ✓ が残ります。 */
     .select-checkbox {
       display: none; position: absolute; top: 8px; right: 8px; width: 22px; height: 22px;
-      border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,0.3);
-      box-shadow: 0 2px 5px rgba(0,0,0,0.3); z-index: 10;
+      border-radius: 50%; border: 2px solid #fff; background: rgba(6, 9, 58, 0.88);
+      box-shadow: 0 2px 5px rgba(0,0,0,0.45); z-index: 10;
       align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: bold;
     }
     .select-mode-active .select-checkbox { display: flex; }
-    .select-mode-active .grid-item.selected .select-checkbox { background: var(--wedding-pink); }
+    /* 選択中はシアンで塗ります。チェックは白のままだとシアンの上で 1.9:1 しか
+       出ないので、濃紺にします。 */
+    .select-mode-active .grid-item.selected .select-checkbox {
+      background: var(--neon-cyan); color: #06093a;
+    }
     .select-mode-active .grid-item.selected img { transform: scale(0.94); border-radius: 8px; opacity: 0.85; }
 
     .album-more { padding: 24px 20px 8px; }
     .btn-load-more {
-      background: #fff; border: 1.5px solid var(--wedding-gold); color: #6b5a44;
-      padding: 12px 28px; border-radius: 24px; font-size: 13px; font-weight: 700; cursor: pointer;
+      background: var(--neon-panel); border: 1px solid var(--neon-cyan); color: var(--neon-cyan);
+      box-shadow: 0 0 10px rgba(0, 204, 255, 0.4);
+      padding: 12px 28px; border-radius: 6px; font-size: 13px; font-weight: 700; cursor: pointer;
+      font-family: var(--dot-font); letter-spacing: 1px;
     }
     .btn-load-more:disabled { opacity: 0.5; }
 
     .bottom-download-bar {
       position: fixed; bottom: 0; left: 0; right: 0; z-index: 60;
       padding: 12px 20px calc(12px + env(safe-area-inset-bottom)) 20px;
-      background: rgba(255, 255, 255, 0.96);
+      background: rgba(6, 9, 58, 0.96);
       backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-      border-top: 1px solid var(--insta-border); box-shadow: 0 -4px 20px rgba(0,0,0,0.08);
+      border-top: 1px solid var(--neon-line); box-shadow: 0 -4px 20px rgba(0,0,0,0.45);
       display: flex; justify-content: space-between; align-items: center; gap: 12px;
     }
-    .download-bar-info { font-size: 13px; font-weight: 700; color: #333; }
+    .download-bar-info {
+      font-size: 13px; font-weight: 700; color: var(--neon-text);
+      font-family: var(--dot-font);
+    }
+    /* 主要アクションは表紙の「カメラを起動する」と同じマゼンタに揃えます */
     .btn-exec-download {
-      background: linear-gradient(135deg, #e8b4be 0%, var(--wedding-pink) 100%);
-      color: #fff; border: none; padding: 12px 20px; border-radius: 25px;
+      background: var(--neon-magenta);
+      color: #200018; border: none; padding: 12px 20px; border-radius: 6px;
       font-weight: 700; font-size: 13px; cursor: pointer;
-      box-shadow: 0 4px 15px rgba(223, 168, 180, 0.4);
+      font-family: var(--dot-font); letter-spacing: 0.06em;
+      box-shadow: 0 0 18px rgba(255, 68, 204, 0.5);
       transition: transform 0.1s; white-space: nowrap;
     }
     .btn-exec-download:active { transform: scale(0.95); }
-    .btn-exec-download:disabled { opacity: 0.5; box-shadow: none; }
+    /* 写真が 0 枚のときはここが無効になります。薄めるだけだと濃紺に沈むので、
+       グローだけ落として塗りは残し、押せないことは薄さで示します。 */
+    .btn-exec-download:disabled { opacity: 0.68; box-shadow: none; }
 
-    .album-status { font-size: 13px; color: #8a8a8a; margin: 48px 24px; line-height: 1.8; }
-    .album-status strong { display: block; font-size: 15px; color: var(--wedding-pink-deep); margin-bottom: 8px; }
+    /* 空・読み込み中・失敗の案内。文章なので本文は通常書体のままにします */
+    .album-status { font-size: 13px; color: var(--neon-text-dim); margin: 48px 24px; line-height: 1.8; }
+    .album-status strong {
+      display: block; font-size: 15px; color: var(--neon-yellow); margin-bottom: 8px;
+      font-family: var(--dot-font); letter-spacing: 0.06em;
+      text-shadow: 0 0 10px rgba(255, 238, 0, 0.5);
+    }
     .album-status button {
-      margin-top: 16px; padding: 10px 22px; border-radius: 22px; border: none;
-      background: var(--wedding-pink); color: #fff; font-weight: 700; font-size: 12px; cursor: pointer;
+      margin-top: 16px; padding: 10px 22px; border-radius: 6px; border: none;
+      background: var(--neon-magenta); color: #200018; font-weight: 700; font-size: 12px; cursor: pointer;
+      font-family: var(--dot-font); letter-spacing: 0.06em;
+      box-shadow: 0 0 14px rgba(255, 68, 204, 0.45);
+      /* 読み込み失敗から戻れる唯一の導線なので、当たり判定を 44px 確保します
+         （このボタンは innerHTML で差し込まれるため、上のタップ域拡張グループの
+         セレクタには入っていません）。 */
+      min-height: 44px;
     }
 
     /* ── モーダル共通 ───────────────────────────────────── */
@@ -791,19 +853,25 @@
       position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
       width: 90%; max-width: 450px; overflow-y: auto;
       max-height: 90vh; max-height: 90dvh;
-      background: #fff; border-radius: 16px;
+      background: rgba(6, 9, 58, 0.96); border-radius: 10px;
+      border: 1px solid var(--neon-cyan);
+      box-shadow: 0 0 0 1px rgba(0, 204, 255, 0.2), 0 12px 40px rgba(0, 0, 0, 0.6);
     }
     .modal-header {
       display: flex; justify-content: space-between; align-items: center;
-      padding: 12px 16px; border-bottom: 1px solid var(--insta-border);
+      padding: 12px 16px; border-bottom: 1px solid var(--neon-line);
     }
-    .modal-user-info { display: flex; align-items: center; font-weight: 700; font-size: 13px; color: #262626; }
+    .modal-user-info {
+      display: flex; align-items: center; font-weight: 700; font-size: 13px;
+      color: var(--neon-text); font-family: var(--dot-font);
+    }
     .modal-avatar {
       width: 28px; height: 28px; border-radius: 50%; margin-right: 10px;
-      background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);
+      background: linear-gradient(135deg, var(--neon-cyan) 0%, var(--neon-magenta) 100%);
+      box-shadow: 0 0 10px rgba(0, 204, 255, 0.5);
     }
     .modal-img-container {
-      width: 100%; min-height: 200px; background: #faf9f7;
+      width: 100%; min-height: 200px; background: var(--neon-tile);
       display: flex; align-items: center; justify-content: center;
     }
     /* display を指定したクラスはブラウザ標準の [hidden] { display: none } に勝ちます。
@@ -814,7 +882,11 @@
       width: 100%; object-fit: contain; display: block;
       max-height: 60vh; max-height: 60dvh;
     }
-    .modal-actions { padding: 12px 16px; display: flex; justify-content: flex-end; align-items: center; }
+    /* 濃紺のパネルでは写真と操作列の境が溶けるので、ヘッダーと同じ線で区切ります */
+    .modal-actions {
+      padding: 12px 16px; display: flex; justify-content: flex-end; align-items: center;
+      border-top: 1px solid var(--neon-line);
+    }
 
     /* 受付終了の案内 */
     /* 受付終了の案内。表紙の中に出るので濃紺地に合わせます */
@@ -828,15 +900,18 @@
     .upload-closed-notice[hidden] { display: none; }
     .btn-mode-select:disabled { opacity: 0.45; box-shadow: none; }
     .download-btn {
-      background: var(--wedding-pink); color: #fff; border: none; padding: 10px 18px;
-      border-radius: 8px; font-weight: 700; cursor: pointer;
+      background: var(--neon-magenta); color: #200018; border: none; padding: 10px 18px;
+      border-radius: 6px; font-weight: 700; cursor: pointer;
+      font-family: var(--dot-font); letter-spacing: 0.06em;
+      box-shadow: 0 0 14px rgba(255, 68, 204, 0.45);
       display: flex; align-items: center; gap: 8px; font-size: 13px;
     }
     .download-btn:active { opacity: 0.8; }
     .download-btn:disabled { opacity: 0.5; }
     .close-btn-top {
       position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 16px;
-      color: #fff; font-size: 32px; cursor: pointer; z-index: 20;
+      color: var(--neon-cyan); font-size: 32px; cursor: pointer; z-index: 20;
+      text-shadow: 0 0 10px rgba(0, 204, 255, 0.6);
       background: none; border: none; line-height: 1; padding: 8px;
     }
 
@@ -867,8 +942,9 @@
     .privacy-note { font-size: 10.5px; color: #8a8a8a; line-height: 1.6; margin-bottom: 18px; }
 
     /* ── 名前登録モーダル ───────────────────────────────
-       表紙とカメラの間に挟まる画面なので、ここだけ白いと切り替わりが目立ちます。
-       アルバム側のモーダルは白のままにしたいので #nameModal に限定しています。 */
+       表紙とカメラの間に挟まる画面です。アルバムのプレビューモーダルとは役割が違い、
+       同意文や入力欄を持つので、配色と書体はここで #nameModal に限定して持たせます
+       （.modal-content-wrapper のベース側は写真プレビュー向けの値です）。 */
     #nameModal .name-panel {
       padding: 34px 24px;
       background: var(--neon-panel);
@@ -914,19 +990,32 @@
     /* ── 進捗オーバーレイ ───────────────────────────────── */
     .progress-overlay {
       display: none; position: fixed; top: 0; right: 0; bottom: 0; left: 0;
-      background: rgba(255, 255, 255, 0.94);
+      background: rgba(6, 9, 58, 0.95);
       backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
       z-index: 9700; flex-direction: column; align-items: center; justify-content: center;
-      color: #333; padding: 30px;
+      color: var(--neon-text); padding: 30px;
     }
     .progress-overlay.is-open { display: flex; }
-    .progress-text { font-size: 16px; margin-bottom: 12px; font-weight: 700; color: var(--wedding-pink-deep); }
-    .progress-bar-track { width: 100%; max-width: 260px; height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
-    .progress-bar-fill { height: 100%; width: 0%; background: var(--wedding-pink); transition: width 0.3s ease; }
-    .progress-subtext { font-size: 11px; color: #888; margin-top: 12px; line-height: 1.7; }
+    .progress-text {
+      font-size: 16px; margin-bottom: 12px; font-weight: 700; color: var(--neon-yellow);
+      font-family: var(--dot-font); letter-spacing: 0.06em;
+      text-shadow: 0 0 10px rgba(255, 238, 0, 0.5);
+    }
+    .progress-bar-track {
+      width: 100%; max-width: 260px; height: 6px; background: rgba(0, 204, 255, 0.18);
+      border-radius: 3px; overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%; width: 0%; background: var(--neon-cyan); transition: width 0.3s ease;
+      box-shadow: 0 0 10px rgba(0, 204, 255, 0.8);
+    }
+    /* 進み具合の補足は文章なので通常書体のままにします */
+    .progress-subtext { font-size: 11px; color: var(--neon-text-dim); margin-top: 12px; line-height: 1.7; }
     .progress-overlay button {
-      margin-top: 22px; background: none; border: 1px solid #ccc; color: #777;
-      padding: 8px 20px; border-radius: 20px; font-size: 12px; cursor: pointer;
+      margin-top: 22px; background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--neon-cyan); color: var(--neon-cyan);
+      padding: 8px 20px; border-radius: 6px; font-size: 12px; cursor: pointer;
+      font-family: var(--dot-font); letter-spacing: 0.06em;
     }
 
     /* ── アプリ内ブラウザ警告 ───────────────────────────── */
@@ -945,8 +1034,10 @@
     }
     .sheet-backdrop.is-open { display: flex; }
     .sheet {
-      width: 100%; max-width: 480px; background: #fff;
-      border-radius: 20px 20px 0 0; padding: 22px 20px calc(22px + env(safe-area-inset-bottom));
+      width: 100%; max-width: 480px; background: rgba(6, 9, 58, 0.97);
+      border-top: 1px solid var(--neon-cyan);
+      box-shadow: 0 -6px 30px rgba(0, 0, 0, 0.55);
+      border-radius: 12px 12px 0 0; padding: 22px 20px calc(22px + env(safe-area-inset-bottom));
       animation: slideUp 0.25s ease-out;
       /* 親は flex-end で下寄せなので、内容がビューポートより高いとはみ出しは上方向に
          出て到達できなくなります（横向きや文字拡大時）。枠内でスクロールさせます。 */
@@ -954,21 +1045,38 @@
       max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px);
     }
     @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-    .sheet h2 { font-size: 15px; margin: 0 0 4px; color: #333; }
-    .sheet p { font-size: 12px; color: #888; margin: 0 0 18px; line-height: 1.6; }
+    .sheet h2 {
+      font-size: 15px; margin: 0 0 4px; color: var(--neon-yellow);
+      font-family: var(--dot-font); letter-spacing: 0.06em;
+      text-shadow: 0 0 10px rgba(255, 238, 0, 0.5);
+    }
+    .sheet p { font-size: 12px; color: var(--neon-text-dim); margin: 0 0 18px; line-height: 1.6; }
     .sheet-option {
       width: 100%; display: flex; align-items: flex-start; gap: 12px; text-align: left;
-      padding: 14px 16px; margin-bottom: 10px; border-radius: 14px;
-      border: 1.5px solid #eee; background: #fff; cursor: pointer; font-size: 13px;
+      padding: 14px 16px; margin-bottom: 10px; border-radius: 6px;
+      border: 1px solid var(--neon-line); background: rgba(0, 0, 0, 0.3);
+      color: var(--neon-text); cursor: pointer; font-size: 13px;
     }
     /* display を指定したクラスはブラウザ標準の [hidden] { display: none } に勝ってしまいます。
        これが無いと el.hidden = true が効かず、使えない保存方法まで並び続けます。 */
     .sheet-option[hidden] { display: none; }
-    .sheet-option:disabled { opacity: 0.4; }
-    .sheet-option.is-primary { border-color: var(--wedding-pink); background: #fff8fa; }
+    /* 使えない保存方法。濃紺の地では 0.4 まで落とすと枠ごと消えるので緩めます */
+    .sheet-option:disabled { opacity: 0.62; }
+    /* おすすめの保存方法。枠と淡い塗りで 1 つだけ浮かせます */
+    .sheet-option.is-primary {
+      border-color: var(--neon-cyan); background: rgba(0, 204, 255, 0.12);
+      box-shadow: 0 0 12px rgba(0, 204, 255, 0.3);
+    }
     .sheet-option .sheet-option-icon { font-size: 20px; line-height: 1.2; }
-    .sheet-option .sheet-option-title { font-weight: 700; display: block; margin-bottom: 3px; }
-    .sheet-option .sheet-option-desc { font-size: 11px; color: #8a8a8a; line-height: 1.5; font-weight: 400; }
+    .sheet-option .sheet-option-title {
+      font-weight: 700; display: block; margin-bottom: 3px;
+      font-family: var(--dot-font); letter-spacing: 0.04em;
+    }
+    /* 補足は文章なので通常書体のままにします */
+    .sheet-option .sheet-option-desc { font-size: 11px; color: var(--neon-text-dim); line-height: 1.5; font-weight: 400; }
+    /* シートのキャンセル。.btn-text-link のベース（#999）はアプリ内ブラウザ警告と
+       共用なので、濃紺のシートの中だけ上書きします。 */
+    #downloadSheet .btn-text-link { color: var(--neon-text-dim); }
 
     /* ── トースト（全画面表示中でも消えない通知） ───────── */
     /* カメラ画面ではトーストを上へ退避させます。下に出すと 80px のシャッターに
@@ -980,6 +1088,16 @@
       top: calc(56px + env(safe-area-inset-top));
     }
 
+    /* アルバムでは画面下に「⬇️ 写真を保存」バーが固定されています。
+       トーストの方が手前（9800 対 60）なので、そのままだと保存ボタンを
+       9 秒間覆います。バーの実高は JS が --download-bar-h に流します。
+       その値は padding（env(safe-area-inset-bottom) 込み）を含むので、
+       ここで env() を足すと二重に効きます。足していないのはそのためです。
+       ResizeObserver が無い端末向けに、既定値も safe-area 込みにしています。 */
+    body.is-album .toast-stack {
+      bottom: calc(var(--download-bar-h, calc(68px + env(safe-area-inset-bottom))) + 12px);
+    }
+
     .toast-stack {
       position: fixed; left: 50%; transform: translateX(-50%);
       bottom: calc(24px + env(safe-area-inset-bottom));
@@ -987,12 +1105,24 @@
       width: calc(100% - 40px); max-width: 380px; pointer-events: none;
     }
     .toast {
-      background: rgba(30, 30, 30, 0.94); color: #fff; border-radius: 12px;
+      background: rgba(6, 9, 58, 0.96); color: var(--neon-text); border-radius: 6px;
+      border: 1px solid var(--neon-cyan);
       padding: 12px 16px; font-size: 12.5px; line-height: 1.6;
-      box-shadow: 0 6px 24px rgba(0,0,0,0.3); animation: toastIn 0.2s ease-out;
+      box-shadow: 0 0 12px rgba(0, 204, 255, 0.35), 0 6px 24px rgba(0,0,0,0.45);
+      animation: toastIn 0.2s ease-out;
     }
-    .toast.is-error { background: rgba(178, 48, 44, 0.96); }
-    .toast.is-success { background: rgba(58, 130, 96, 0.96); }
+    /* 失敗の赤は意味を持つので配色を変えません。枠だけ揃えます */
+    .toast.is-error {
+      background: rgba(120, 20, 18, 0.96); border-color: #ff4444; color: #ffd7d7;
+      box-shadow: 0 0 12px rgba(255, 68, 68, 0.4), 0 6px 24px rgba(0,0,0,0.45);
+    }
+    /* 成功の緑も意味を持つので色は残します。ただしトーストはアイコンも無く地色だけが
+       成功/失敗の手がかりなので、赤側と同じ濃さに揃えて文字を確保します
+       （元の明るい緑のままだと、地の文字色 --neon-text で 4.19:1 まで落ちます）。 */
+    .toast.is-success {
+      background: rgba(16, 78, 48, 0.96); border-color: var(--neon-green); color: #ccffdd;
+      box-shadow: 0 0 12px rgba(0, 238, 68, 0.35), 0 6px 24px rgba(0,0,0,0.45);
+    }
     @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
@@ -1003,7 +1133,8 @@
   <!-- アプリ内ブラウザ警告 -->
   <div id="inappWarning" class="inapp-warning">
     <div style="font-size: 40px; margin-bottom: 15px;">🌐</div>
-    <div style="font-size: 18px; font-weight: bold; margin-bottom: 12px; color: var(--wedding-pink);">
+    <div style="font-size: 18px; font-weight: bold; margin-bottom: 12px; color: var(--neon-yellow);
+                font-family: var(--dot-font); letter-spacing: 0.06em;">
       Safari か Chrome で開いてください
     </div>
     <div style="font-size: 13px; line-height: 1.8; color: #ddd; max-width: 300px;">
@@ -4024,6 +4155,7 @@
    * 実際の高さを測って CSS 変数に流し、必ずコントロールの上に置きます。
    * ======================================================================== */
   let controlsObserver = null;
+  let downloadBarObserver = null;
 
   function trackControlsHeight() {
     const overlay = document.querySelector('.camera-controls-overlay');
@@ -4045,6 +4177,29 @@
     if (controlsObserver || typeof ResizeObserver === 'undefined') return;
     controlsObserver = new ResizeObserver(apply);
     controlsObserver.observe(overlay);
+  }
+
+  /* アルバムの保存バーの実高を --download-bar-h に流します。
+     トーストをこの高さのぶん持ち上げないと、保存バーに重なって
+     「⬇️ 写真を保存」が 9 秒間押せているのに見えない状態になります
+     （トーストは z-index 9800、保存バーは 60）。固定値にしないのは、
+     端末の文字サイズ設定でボタンの高さが変わるためです。 */
+  function trackDownloadBarHeight() {
+    const bar = document.getElementById('bottomDownloadBar');
+    if (!bar) return;
+
+    const apply = () => {
+      /* offsetHeight は padding 込みで、その padding には
+         env(safe-area-inset-bottom) が入っています。CSS 側で env() を
+         足すと二重に効くので、ここでは足しません。 */
+      document.documentElement.style.setProperty('--download-bar-h', bar.offsetHeight + 'px');
+    };
+
+    apply();
+
+    if (downloadBarObserver || typeof ResizeObserver === 'undefined') return;
+    downloadBarObserver = new ResizeObserver(apply);
+    downloadBarObserver.observe(bar);
   }
 
   function syncFullscreenUI() {
@@ -4074,10 +4229,12 @@
     state.currentView = target;
     // カメラ画面ではトーストを上へ退避させます（シャッターに重ねないため）
     document.body.classList.toggle('is-camera', target === 'camera');
-    /* 表紙だけ地色が濃紺です。html にも載せないと、iOS のバウンススクロールで
-       画面の上下にクリーム色（--paper）がはみ出して見えます */
+    /* 地色は html, body で濃紺にしていますが、表紙だけは初期表示から濃紺である
+       必要があるので、markup と合わせてこのクラスでも指定しています。 */
     document.body.classList.toggle('is-cover', target === 'cover');
     document.documentElement.classList.toggle('is-cover', target === 'cover');
+    // アルバムではトーストを保存バーの上へ逃がします（下に出すと重なります）
+    document.body.classList.toggle('is-album', target === 'album');
 
     if (target === 'camera') {
       els['view-camera'].classList.add('active');
@@ -4106,6 +4263,7 @@
 
     if (target === 'album') {
       els['view-album'].classList.add('active');
+      trackDownloadBarHeight();
       loadAlbum(true);
     } else {
       els['view-cover'].classList.add('active');
