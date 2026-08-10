@@ -413,8 +413,21 @@
       border-color: var(--danger); color: var(--danger);
       box-shadow: 0 0 25px rgba(217, 83, 79, 0.7);
     }
+    /* 残り時間のリング。
+       大きさは必ず width / height で指定します。top/right/bottom/left の 4 辺だけで
+       決めてはいけません。<svg> は置換要素なので width: auto は「4 辺から逆算した値」
+       ではなく内在サイズに解決され、viewBox しか持たないこの SVG では既定の
+       300x150 を縦横比 1:1 に収めた 150x150 になります。結果、左上を起点に
+       150px の円が描かれ、リングがシャッターの右下へ大きくはみ出します。
+
+       位置は 50% + 負のマージンで中心を合わせます。絶対配置の % は「基準要素の
+       パディングボックス」に対する割合なので、枠線の太さが変わっても中心は
+       ずれません（縦向き 80px/枠 4px、横向き 64px/枠 3px の両方で成立します）。 */
     .shutter-ring {
-      position: absolute; top: -4px; right: -4px; bottom: -4px; left: -4px;
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 88px; height: 88px;          /* シャッター 80px の外側 4px */
+      margin-top: -44px; margin-left: -44px;
       border-radius: 50%;
       pointer-events: none; display: none;
     }
@@ -582,6 +595,12 @@
       .mode-switch button { padding: 4px 7px; font-size: 10px; white-space: nowrap; }
       .camera-controls { flex-direction: column; gap: 16px; width: auto; }
       .shutter-btn-visual { width: 64px; height: 64px; border-width: 3px; }
+      /* シャッターが小さくなるので、リングも一緒に縮めます。ここを忘れると
+         88px のリングだけが残り、64px のシャッターからはみ出します。 */
+      .shutter-ring {
+        width: 72px; height: 72px;        /* シャッター 64px の外側 4px */
+        margin-top: -36px; margin-left: -36px;
+      }
       .shutter-icon { font-size: 24px; }
       .shutter-label { font-size: 8px; }
       .switch-cam-btn { width: 38px; height: 38px; font-size: 16px; }
