@@ -331,11 +331,21 @@
       font-family: var(--dot-font);
     }
     .camera-container { width: 100%; height: 100%; position: relative; }
-    #cameraVideo { width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
+    /* --zoom はデジタルズームの倍率です（端末側のズームが使える場合は 1 のまま）。
+       はみ出しは #view-camera の overflow: hidden で切られます。
+       transform は要素の見た目だけを変えるので、getBoundingClientRect() は
+       拡大後の値を返します。撮影範囲の計算で offsetWidth / offsetHeight を
+       使っているのはそのためです（captureFrame のコメント参照）。 */
+    #cameraVideo {
+      width: 100%; height: 100%; object-fit: cover; display: block; background: #000;
+      transform: scale(var(--zoom, 1));
+      transform-origin: center center;
+    }
     /* 自撮りは鏡像で見せます。カメラアプリと同じ見え方にするためです。
        これは CSS の見た目だけの反転で、canvas への drawImage には影響しません。
-       保存される写真は反転しないので、背景の文字が左右逆になりません。 */
-    #cameraVideo.is-mirrored { transform: scaleX(-1); }
+       保存される写真は反転しないので、背景の文字が左右逆になりません。
+       ズームと併用するので、反転と拡大を 1 つの transform にまとめます。 */
+    #cameraVideo.is-mirrored { transform: scaleX(-1) scale(var(--zoom, 1)); }
     .camera-placeholder {
       position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
       color: #fff; font-size: 14px; line-height: 1.7; width: 100%; padding: 0 24px;
@@ -483,6 +493,29 @@
     }
     .switch-cam-btn[hidden] { display: none; }
 
+    /* 倍率表示を兼ねたズームボタン。押すたびに 1.0× → 1.5× → 2.0× と回ります。
+       ピンチだけだと気づかれないので、必ず見える手がかりを置きます。
+       カメラ切替と同じ 44px 角にして、左右の重さを揃えています。 */
+    .zoom-btn {
+      background: var(--neon-panel);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border: 1px solid var(--neon-cyan); color: var(--neon-cyan); border-radius: 50%;
+      box-shadow: 0 0 8px rgba(0, 204, 255, 0.45);
+      width: 44px; height: 44px; font-size: 12px; cursor: pointer;
+      font-family: var(--dot-font); letter-spacing: 0;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+    /* 等倍でないことは一目で分かるようにします */
+    .zoom-btn.is-zoomed {
+      background: var(--neon-cyan); color: #06093a;
+      box-shadow: 0 0 12px rgba(0, 204, 255, 0.75);
+    }
+    .zoom-btn[hidden] { display: none; }
+    /* 片側だけボタンが出るときに、シャッターを中央に保つための詰め物 */
+    .control-spacer { width: 44px; flex: none; }
+    .control-spacer[hidden] { display: none; }
+
     /* ── 直近に撮った写真 ─────────────────────────────────
        「本当に撮れたのか」がゲストの一番の不安なので、
        サーバーの応答を待たずにキューの Blob から即座に出します。 */
@@ -552,6 +585,9 @@
       .shutter-icon { font-size: 24px; }
       .shutter-label { font-size: 8px; }
       .switch-cam-btn { width: 38px; height: 38px; font-size: 16px; }
+      .zoom-btn { width: 38px; height: 38px; font-size: 10px; }
+      /* 横向きは縦並びなので、詰め物は高さを合わせます */
+      .control-spacer { width: auto; height: 38px; }
       .camera-chip { top: calc(8px + env(safe-area-inset-top)); padding: 6px 12px; font-size: 10px; }
       #status {
         position: absolute; bottom: 8px; left: 15px; margin: 0;
@@ -1297,7 +1333,10 @@
         <button data-action="mode-video" id="btnModeVideo">動画</button>
       </div>
 
+      <!-- 左右のボタンは片方だけ出ることがあります。空いた側に同じ幅の詰め物を
+           置いて、シャッターが画面の中央からずれないようにしています。 -->
       <div class="camera-controls">
+        <div id="controlSpacerLeft" class="control-spacer" hidden></div>
         <button class="switch-cam-btn" id="switchCamBtn" data-action="switch-camera" hidden
                 aria-label="前面・背面カメラを切り替える">🔄</button>
         <button class="shutter-btn-visual" id="shutterBtn" data-action="shoot" aria-label="撮影する">
@@ -1307,7 +1346,9 @@
           <span class="shutter-icon" id="shutterIcon" aria-hidden="true">📷</span>
           <span class="shutter-label" id="shutterLabel">SHOOT</span>
         </button>
-        <div id="controlSpacer" style="width: 44px;" hidden></div>
+        <button class="zoom-btn" id="zoomBtn" data-action="cycle-zoom" hidden
+                aria-label="ズームを切り替える">1.0×</button>
+        <div id="controlSpacer" class="control-spacer" hidden></div>
       </div>
       <div id="status" role="status" aria-live="polite"></div>
     </div>
@@ -1563,10 +1604,44 @@
     VIDEO_BITS_PER_SEC: 1500000,
     VIDEO_AUDIO_BITS_PER_SEC: 64000,
     /* 撮影ストリームの解像度の希望値（実際に何が返るかは端末次第）。
-       写真と動画で必ず同じ値を使います。以前は録画側だけ 1280x720 で取り直しており、
-       動画を 1 本撮ると以降その端末の写真だけ解像度が半分以下になっていました。 */
-    CAPTURE_IDEAL_WIDTH: 1920,
-    CAPTURE_IDEAL_HEIGHT: 1080,
+       ideal なので、出せない端末は出せる範囲に落として返します。
+
+       写真だけ 4K を要求します。ズームは iOS Safari が zoom 制約に対応して
+       いないためデジタル（切り出し）で行うほかなく、元が大きくないと寄るほど
+       粗くなるためです。3840x2160 なら、縦持ちの保存サイズは 1× で 1200x1600
+       （MAX_DIM で頭打ち）、2× でちょうど旧来の 810x1080 と同じになります。
+
+       ただし「2 倍まで劣化しない」は例外があります。端末が縦長フレーム
+       （2160x3840 など）を返している状態で横持ちすると、1.55 倍を超えたあたりで
+       旧来の画素数を下回ります（自動回転オフで横に構えたときに起こりえます）。
+       それ以外の組み合わせでは 2.0〜3.0 倍まで旧来以上です。
+
+       動画は 1920x1080 のままにします。VIDEO_BITS_PER_SEC は 1.5Mbps で、
+       4K に当てると 1 画素あたり 0.02bit しか無くブロックだらけになるうえ、
+       会場で 4K を符号化させると発熱と電池消費が跳ね上がります。
+
+       モードを切り替えるたびに取り直すので、写真に戻したときは必ず高い方へ
+       戻します。以前ここを戻し忘れて「動画を 1 本撮ると以降の写真だけ
+       解像度が半分以下になる」不具合が出ています。 */
+    CAPTURE_IDEAL_WIDTH: 3840,
+    CAPTURE_IDEAL_HEIGHT: 2160,
+    VIDEO_IDEAL_WIDTH: 1920,
+    VIDEO_IDEAL_HEIGHT: 1080,
+
+    /* --- ズーム -----------------------------------------------------------
+       端末側のズーム（applyConstraints の zoom）が使えるならそちらを優先します。
+       画質が落ちず録画にも効きますが、iOS Safari は未対応です。iOS では
+       Chrome も Firefox も WKWebView なので、ブラウザを変えても同じです。
+
+       使えない端末はデジタルズーム（中央を切り出す）に落とします。こちらは
+       録画には効きません（MediaRecorder は CSS ではなくトラックを録るため）。
+       そのため動画モードではデジタルズームを隠します。
+
+       上限を 2 倍にしているのは、上の 4K 前提でちょうど旧来の画質に並ぶ点だから
+       です。3 倍まで許すと 540x720 まで落ち、プリントに耐えません。 */
+    ZOOM_MAX_DIGITAL: 2,
+    /** ボタンを 1 回押すたびに進む倍率 */
+    ZOOM_STEPS: [1, 1.5, 2],
     /* 送信前の安全弁。これを超えたら送らずに知らせます。
        送信を止められるのはここだけなので、GAS の MAX_UPLOAD_BYTES_VIDEO（12MB）
        より必ず低くしておきます。逆にするか同値にすると、通らない動画を会場の
@@ -1593,8 +1668,16 @@
     renderedCount: 0,
 
     stream: null,
+    /** いま繋がっているストリームが写真用か動画用か。取り直しの要否の判定に使います */
+    streamKind: 'photo',
     facingMode: 'environment',
     hasMultipleCameras: false,
+    /** 表示倍率（1 = 等倍）。端末側ズームでもデジタルズームでも同じ意味です */
+    zoom: 1,
+    /** 端末側ズームが使えるときだけ { min, max } が入ります。iOS は常に null です */
+    zoomNative: null,
+    /** ピンチ開始時の指の間隔と倍率 */
+    pinchStart: null,
     isCapturing: false,
     isCameraStarting: false,
 
@@ -1659,7 +1742,8 @@
     'btnDiscardPending', 'btnCancelUpload', 'btnSaveArchive', 'btnAutoSaveToggle',
     'view-cover', 'view-camera', 'view-album',
     'cameraVideo', 'cameraPlaceholder', 'cameraPlaceholderText', 'btnRetryCamera',
-    'switchCamBtn', 'shutterBtn', 'controlSpacer', 'status', 'recentShots',
+    'switchCamBtn', 'shutterBtn', 'controlSpacer', 'controlSpacerLeft', 'zoomBtn',
+    'status', 'recentShots',
     'shutterIcon', 'shutterLabel', 'shutterRingArc', 'recTimer', 'recTimerText',
     'modeSwitch', 'btnModePhoto', 'btnModeVideo',
     'modalImgWrap', 'modalVideoWrap', 'modalVideo',
@@ -3187,13 +3271,27 @@
       /* まず「プレビューで実際に見えている範囲」を求めます。#cameraVideo は
          object-fit: cover なので、画面より横長のフレームは左右が、縦長のフレームは
          上下が画面外に隠れています。 */
-      const rect = video.getBoundingClientRect();
-      const coverScale = (rect.width && rect.height)
-        ? Math.max(rect.width / vw, rect.height / vh)
+      /* 幅と高さは offsetWidth / offsetHeight で取ります。
+         getBoundingClientRect() は transform 適用後の値を返すため、
+         デジタルズーム中は拡大された枠が返り、切り出し範囲が倍率のぶん
+         ずれます（寄っているのに広く切り出してしまいます）。
+         offsetWidth / offsetHeight は transform の影響を受けません。 */
+      const viewW = video.offsetWidth;
+      const viewH = video.offsetHeight;
+      const coverScale = (viewW && viewH)
+        ? Math.max(viewW / vw, viewH / vh)
         : 1;
-      let srcW = coverScale > 0 ? Math.min(vw, rect.width / coverScale) : vw;
-      let srcH = coverScale > 0 ? Math.min(vh, rect.height / coverScale) : vh;
+      let srcW = coverScale > 0 ? Math.min(vw, viewW / coverScale) : vw;
+      let srcH = coverScale > 0 ? Math.min(vh, viewH / coverScale) : vh;
       if (!(srcW > 0) || !(srcH > 0)) { srcW = vw; srcH = vh; }
+
+      /* デジタルズームぶん、中央を狭めます。端末側ズームのときはトラックが
+         既に寄っているので digitalZoom() は 1 を返し、ここは素通りします。
+         このあとの目標比への調整は「広げる方向にだけ」なので、寄せた範囲が
+         元に戻ることはありません（広げるのは目標比までで、フレーム全体まで
+         広げるわけではないためです）。 */
+      const dz = digitalZoom();
+      if (dz > 1) { srcW = srcW / dz; srcH = srcH / dz; }
 
       /* そこから目標比（縦 3:4 ／横 4:3）へ「広げる方向にだけ」寄せます。
          狭める方向に寄せてはいけません。旧版は目標比でフレームを切っていたため、
@@ -3231,8 +3329,10 @@
       }
     } else if (CONFIG.CAPTURE_MODE === 'preview') {
       // 画面に見えている範囲だけを切り出します（object-fit: cover と同じ計算）
-      const rect = video.getBoundingClientRect();
-      const previewRatio = (rect.width && rect.height) ? rect.width / rect.height : vw / vh;
+      // ここも transform の影響を受けない offsetWidth / offsetHeight を使います
+      const viewW = video.offsetWidth;
+      const viewH = video.offsetHeight;
+      const previewRatio = (viewW && viewH) ? viewW / viewH : vw / vh;
 
       let outW, outH;
       if (previewRatio >= 1) {
@@ -3245,16 +3345,21 @@
       canvas.width = outW;
       canvas.height = outH;
 
+      const dz = digitalZoom();
       const scale = Math.max(outW / vw, outH / vh);
-      const srcW = outW / scale;
-      const srcH = outH / scale;
+      const srcW = outW / scale / dz;
+      const srcH = outH / scale / dz;
       ctx.drawImage(video, (vw - srcW) / 2, (vh - srcH) / 2, srcW, srcH, 0, 0, outW, outH);
     } else {
-      // フレーム全体を、アスペクト比を保ったまま縮小します
-      const scale = Math.min(1, CONFIG.MAX_DIM / Math.max(vw, vh));
-      canvas.width = Math.round(vw * scale);
-      canvas.height = Math.round(vh * scale);
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // フレーム全体（ズーム中は中央のその範囲）を、比を保ったまま縮小します
+      const dz = digitalZoom();
+      const srcW = vw / dz;
+      const srcH = vh / dz;
+      const scale = Math.min(1, CONFIG.MAX_DIM / Math.max(srcW, srcH));
+      canvas.width = Math.round(srcW * scale);
+      canvas.height = Math.round(srcH * scale);
+      ctx.drawImage(video, (vw - srcW) / 2, (vh - srcH) / 2, srcW, srcH,
+                    0, 0, canvas.width, canvas.height);
     }
 
     return canvas;
@@ -3648,6 +3753,19 @@
     setStatus(kind === 'video'
       ? '🎬 最大 ' + CONFIG.VIDEO_MAX_SEC + ' 秒まで録画できます'
       : '');
+    /* デジタルズーム中に動画へ移ると、寄って見えているのに録画は寄りません。
+       ボタンは syncZoomUI で隠れますが、倍率自体も等倍へ戻します。 */
+    if (kind === 'video' && !state.zoomNative && state.zoom > 1) resetZoom();
+    else syncZoomUI();
+
+    /* 写真は 4K、動画は 1080p を要求しているので、写真へ戻ったら取り直して
+       解像度を上げ直します。ここを忘れると「動画を 1 本撮ると以降の写真だけ
+       粗い」状態に戻ります。動画へ移るときは取り直しません。録画開始時に
+       restartCameraWithAudio が音声つきで取り直すため、二重になるからです。 */
+    if (kind === 'photo' && state.stream && state.streamKind !== 'photo'
+        && state.currentView === 'camera' && !state.isCameraStarting) {
+      initCamera();
+    }
   }
 
   function syncModeSwitch() {
@@ -3825,21 +3943,20 @@
   async function restartCameraWithAudio() {
     const previous = state.stream;
     try {
-      /* 解像度の希望値は initCamera と同じ CONFIG から取ります。ここだけ低い値に
-         しておくと、動画を 1 本撮ったあと写真モードに戻してもストリームが
-         差し替わらないため、以降その端末の写真だけ解像度が半分以下になります。
-         容量は VIDEO_BITS_PER_SEC で抑えられるので、解像度を落とす必要はありません。 */
+      /* 解像度は videoConstraints() に一本化しています。ここで直に書いてはいけません。
+         以前ここだけ 1280x720 を直書きしており、動画を 1 本撮ると写真モードに
+         戻してもストリームが差し替わらず、以降その端末の写真だけ解像度が
+         半分以下になっていました。 */
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: state.facingMode },
-          width: { ideal: CONFIG.CAPTURE_IDEAL_WIDTH },
-          height: { ideal: CONFIG.CAPTURE_IDEAL_HEIGHT }
-        },
+        video: videoConstraints(),
         audio: true
       });
       if (previous) previous.getTracks().forEach((track) => track.stop());
       state.stream = stream;
+      state.streamKind = state.captureKind;
       state.streamHasAudio = stream.getAudioTracks().length > 0;
+      resetZoom();
+      syncZoomCapability();
       els.cameraVideo.srcObject = stream;
       await waitForVideoReady(els.cameraVideo);
       try { await els.cameraVideo.play(); } catch (error) { /* 自動再生の拒否は無視 */ }
@@ -3876,9 +3993,175 @@
   /* ==========================================================================
    * カメラ制御
    * ======================================================================== */
+  /* ==========================================================================
+   * ズーム
+   *
+   * 端末側のズーム（applyConstraints の zoom）が使えるならそれを使います。
+   * 画質が落ちず、録画にも効きます。ただし iOS Safari は zoom 制約に未対応で、
+   * iOS では Chrome も Firefox も WKWebView なのでブラウザを変えても同じです。
+   *
+   * 使えない端末は、中央を切り出すデジタルズームに落とします。こちらは
+   * MediaRecorder がトラックを録るため録画には効きません。プレビューだけ
+   * 寄って録画は寄らない、という食い違いを避けるため、デジタルズームのときは
+   * 動画モードでボタンを隠します。
+   * ======================================================================== */
+
+  /** 撮影時に自分で切り出す倍率。端末が寄せてくれるなら 1（二重に寄せない） */
+  function digitalZoom() {
+    return state.zoomNative ? 1 : state.zoom;
+  }
+
+  function maxZoomFactor() {
+    if (state.zoomNative) {
+      return Math.max(1, state.zoomNative.max / state.zoomNative.min);
+    }
+    return CONFIG.ZOOM_MAX_DIGITAL;
+  }
+
+  function zoomSteps() {
+    const max = maxZoomFactor();
+    if (state.zoomNative) {
+      const mid = Math.round(((1 + max) / 2) * 10) / 10;
+      const top = Math.round(max * 10) / 10;
+      return [1, mid, top].filter((v, i, a) => v >= 1 && a.indexOf(v) === i);
+    }
+    return CONFIG.ZOOM_STEPS.filter((v) => v <= max + 0.001);
+  }
+
+  function zoomAvailable() {
+    if (!state.stream) return false;
+    if (maxZoomFactor() <= 1.05) return false;
+    // デジタルズームは録画に乗らないので、動画モードでは出しません
+    if (!state.zoomNative && state.captureKind === 'video') return false;
+    return true;
+  }
+
+  /** ストリームを張り替えるたびに呼びます。端末側ズームの有無はカメラごとに違います */
+  function syncZoomCapability() {
+    state.zoomNative = null;
+    const track = state.stream && state.stream.getVideoTracks()[0];
+    if (track && typeof track.getCapabilities === 'function') {
+      try {
+        const cap = track.getCapabilities();
+        /* zoom が返る端末でも、min と max が同じ（＝寄れない）ことがあります。
+           その場合は使えないものとして扱い、デジタルへ落とします。 */
+        if (cap && cap.zoom && typeof cap.zoom.max === 'number'
+            && typeof cap.zoom.min === 'number' && cap.zoom.max > cap.zoom.min
+            && cap.zoom.min > 0) {
+          state.zoomNative = { min: cap.zoom.min, max: cap.zoom.max };
+        }
+      } catch (error) { /* 未対応の端末は例外を投げることがあります */ }
+    }
+    syncZoomUI();
+  }
+
+  function setZoom(value) {
+    const max = maxZoomFactor();
+    const next = Math.min(max, Math.max(1, value || 1));
+    // 端末側ズームは applyConstraints が非同期なので、細かすぎる更新は捨てます
+    if (Math.abs(next - state.zoom) < 0.01) return;
+    state.zoom = next;
+    applyZoom();
+  }
+
+  function applyZoom() {
+    if (state.zoomNative) {
+      /* min を 1 倍とみなして掛けます。端末によって min が 1 だったり 100
+         （パーセント）だったりするため、絶対値ではなく比で扱います。 */
+      const track = state.stream && state.stream.getVideoTracks()[0];
+      if (track) {
+        const target = Math.min(state.zoomNative.max, state.zoomNative.min * state.zoom);
+        try {
+          const p = track.applyConstraints({ advanced: [{ zoom: target }] });
+          if (p && p.catch) p.catch(() => {});
+        } catch (error) { /* 拒否されても表示は保ちます */ }
+      }
+      els.cameraVideo.style.setProperty('--zoom', 1);
+    } else {
+      els.cameraVideo.style.setProperty('--zoom', state.zoom);
+    }
+    syncZoomUI();
+  }
+
+  function resetZoom() {
+    state.zoom = 1;
+    state.pinchStart = null;
+    if (els.cameraVideo) els.cameraVideo.style.setProperty('--zoom', 1);
+    syncZoomUI();
+  }
+
+  function cycleZoom() {
+    if (!zoomAvailable()) return;
+    const steps = zoomSteps();
+    const next = steps.find((s) => s > state.zoom + 0.01);
+    setZoom(next === undefined ? steps[0] : next);
+  }
+
+  function syncZoomUI() {
+    if (!els.zoomBtn) return;
+    /* 表示中かどうかに関わらず文字を更新します。隠れている間だけ更新を止めると、
+       次に出したときに古い倍率が一瞬見えます。 */
+    const label = state.zoom.toFixed(1) + '×';
+    els.zoomBtn.textContent = label;
+    els.zoomBtn.classList.toggle('is-zoomed', state.zoom > 1.01);
+    els.zoomBtn.setAttribute('aria-label', 'ズーム ' + label + '。押すと切り替わります');
+    syncControlBalance();
+  }
+
+  /** 左右のボタンの有無に合わせて詰め物を出し入れし、シャッターを中央に保ちます */
+  function syncControlBalance() {
+    if (!els.switchCamBtn || !els.zoomBtn) return;
+    const left = state.hasMultipleCameras;
+    const right = zoomAvailable();
+    els.switchCamBtn.hidden = !left;
+    els.zoomBtn.hidden = !right;
+    els.controlSpacer.hidden = !(left && !right);
+    els.controlSpacerLeft.hidden = !(right && !left);
+  }
+
+  /**
+   * ピンチでのズーム。#view-camera は touch-action: none なので、
+   * ブラウザ既定のピンチは既に抑えられており、ここで自由に解釈できます。
+   */
+  function initZoomGestures() {
+    const area = els.cameraVideo && els.cameraVideo.parentElement;
+    if (!area) return;
+    const gap = (touches) => Math.hypot(
+      touches[0].clientX - touches[1].clientX,
+      touches[0].clientY - touches[1].clientY
+    );
+    area.addEventListener('touchstart', (event) => {
+      if (event.touches.length !== 2 || !zoomAvailable()) return;
+      state.pinchStart = { gap: gap(event.touches), zoom: state.zoom };
+    }, { passive: true });
+    area.addEventListener('touchmove', (event) => {
+      if (!state.pinchStart || event.touches.length !== 2) return;
+      const now = gap(event.touches);
+      if (!state.pinchStart.gap || !now) return;
+      setZoom(state.pinchStart.zoom * (now / state.pinchStart.gap));
+    }, { passive: true });
+    const end = () => { state.pinchStart = null; };
+    area.addEventListener('touchend', end, { passive: true });
+    area.addEventListener('touchcancel', end, { passive: true });
+  }
+
+  /**
+   * 撮影ストリームの希望条件。写真と動画で解像度が違うので 1 箇所にまとめます。
+   * 取り直すたびにここを通せば、片方だけ低いまま戻らない事故を防げます。
+   */
+  function videoConstraints() {
+    const video = state.captureKind === 'video';
+    return {
+      facingMode: { ideal: state.facingMode },
+      width: { ideal: video ? CONFIG.VIDEO_IDEAL_WIDTH : CONFIG.CAPTURE_IDEAL_WIDTH },
+      height: { ideal: video ? CONFIG.VIDEO_IDEAL_HEIGHT : CONFIG.CAPTURE_IDEAL_HEIGHT }
+    };
+  }
+
   async function initCamera() {
     if (state.isCameraStarting) return;
     state.isCameraStarting = true;
+    resetZoom();
 
     stopCamera();
     els.btnRetryCamera.hidden = true;
@@ -3886,14 +4169,7 @@
     els.cameraPlaceholderText.textContent = '📷 カメラを起動しています…';
     setStatus('');
 
-    const constraints = {
-      video: {
-        facingMode: { ideal: state.facingMode },
-        width: { ideal: CONFIG.CAPTURE_IDEAL_WIDTH },
-        height: { ideal: CONFIG.CAPTURE_IDEAL_HEIGHT }
-      },
-      audio: false
-    };
+    const constraints = { video: videoConstraints(), audio: false };
 
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -3902,7 +4178,9 @@
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       state.stream = stream;
+      state.streamKind = state.captureKind;
       els.cameraVideo.srcObject = stream;
+      syncZoomCapability();
 
       /* 実際に前面カメラが選ばれたかはトラックに聞きます。
          facingMode は ideal 指定なので、希望どおりとは限りません。 */
@@ -3980,6 +4258,10 @@
     }
     state.streamHasAudio = false;
     els.cameraVideo.srcObject = null;
+    /* 倍率はストリームに紐づくので一緒に戻します。残しておくと、次にカメラを
+       開いたときプレビューだけ寄った状態で始まります。 */
+    state.zoomNative = null;
+    resetZoom();
   }
 
   /** カメラが 2 つ以上ないときは切替ボタンを出しません */
@@ -3992,8 +4274,8 @@
     } catch (error) {
       state.hasMultipleCameras = true; // 判定できないときは出しておく
     }
-    els.switchCamBtn.hidden = !state.hasMultipleCameras;
-    els.controlSpacer.hidden = !state.hasMultipleCameras;
+    // 左右の出し分けと詰め物は 1 箇所に任せます
+    syncControlBalance();
   }
 
   /**
@@ -4990,6 +5272,7 @@
     'mode-video': () => setCaptureKind('video'),
     'retry-camera': () => initCamera(),
     'switch-camera': switchCamera,
+    'cycle-zoom': cycleZoom,
     'shoot': onShutter,
     'refresh-album': () => loadAlbum(true),
     'load-more': () => loadAlbum(false),
@@ -5114,6 +5397,7 @@
     syncFullscreenUI();
     applyUploadStatusUI();
     wireEvents();
+    initZoomGestures();
 
     // 受付状況の確認。起動を待たせないので await しません
     refreshUploadStatus();
