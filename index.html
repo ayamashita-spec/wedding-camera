@@ -426,15 +426,38 @@
     .shutter-ring {
       position: absolute;
       top: 50%; left: 50%;
-      width: 88px; height: 88px;          /* シャッター 80px の外側 4px */
-      margin-top: -44px; margin-left: -44px;
+      /* シャッター 80px の外側 14px。録画中は枠も赤くなるので、ゲージを枠から
+         離さないと 1 本の太い赤リングに見えて残量が読めません。 */
+      width: 108px; height: 108px;
+      margin-top: -54px; margin-left: -54px;
       border-radius: 50%;
       pointer-events: none; display: none;
     }
     .shutter-btn-visual.is-recording .shutter-ring { display: block; }
     .shutter-ring circle {
-      fill: none; stroke: var(--danger); stroke-width: 4; stroke-linecap: round;
+      fill: none; stroke-width: 6;
       transform: rotate(-90deg); transform-origin: 50% 50%;
+    }
+    /* セレクタに circle を入れているのは、上の .shutter-ring circle（詳細度 0,1,1）
+       に負けて線幅が効かないためです。 */
+    /* 外の淡い層。暗い映像の上でリングの在りかを示します（黒い溝だけだと
+       暗い場面で映像と 1.0:1 になり、未消化ぶんが消えます）。 */
+    .shutter-ring circle.shutter-ring-halo {
+      stroke: rgba(255, 255, 255, 0.45);
+      stroke-width: 11;
+    }
+    /* 内の濃い層。明るい映像の上で、黄のゲージの下地になります */
+    .shutter-ring circle.shutter-ring-track {
+      stroke: rgba(0, 0, 0, 0.6);
+      stroke-width: 8;
+    }
+    /* 残量。赤い枠と同じ色にすると溶けるので黄にします。
+       赤は「録画中」（枠と ● 印）、黄は「残り時間」と役割を分けます。
+       残りわずかで赤へ変える案は見送りました。赤は中間の明るさなので、
+       溝に対して 1.2:1 しか取れず、明るい映像では見えなくなります。
+       残り時間は上の「録画中 残り N 秒」と弧の長さで伝えます。 */
+    #shutterRingArc {
+      stroke: var(--neon-yellow); stroke-linecap: round;
     }
 
     /* ── 写真 / 動画の切り替え ───────────────────────────── */
@@ -598,8 +621,8 @@
       /* シャッターが小さくなるので、リングも一緒に縮めます。ここを忘れると
          88px のリングだけが残り、64px のシャッターからはみ出します。 */
       .shutter-ring {
-        width: 72px; height: 72px;        /* シャッター 64px の外側 4px */
-        margin-top: -36px; margin-left: -36px;
+        width: 88px; height: 88px;        /* シャッター 64px の外側 12px */
+        margin-top: -44px; margin-left: -44px;
       }
       .shutter-icon { font-size: 24px; }
       .shutter-label { font-size: 8px; }
@@ -1360,7 +1383,15 @@
                 aria-label="前面・背面カメラを切り替える">🔄</button>
         <button class="shutter-btn-visual" id="shutterBtn" data-action="shoot" aria-label="撮影する">
           <svg class="shutter-ring" id="shutterRing" viewBox="0 0 100 100" aria-hidden="true">
-            <circle id="shutterRingArc" cx="50" cy="50" r="46"></circle>
+            <!-- 溝（未消化ぶん）。これが無いと「満量がどこか」の基準が画面に無く、
+                 残り 6 割と 9 割を見分けられません。
+                 映像の明るさは読めないので 2 層にします。1 色では明暗どちらかで
+                 必ず地に溶けます（黒だけだと暗い場面で 1.0:1、白だけだと明るい
+                 場面で同じことが起きます）。外の淡い層が暗い映像で、内の濃い層が
+                 明るい映像で効きます。 -->
+            <circle class="shutter-ring-halo" cx="50" cy="50" r="44"></circle>
+            <circle class="shutter-ring-track" cx="50" cy="50" r="44"></circle>
+            <circle id="shutterRingArc" cx="50" cy="50" r="44"></circle>
           </svg>
           <span class="shutter-icon" id="shutterIcon" aria-hidden="true">📷</span>
           <span class="shutter-label" id="shutterLabel">SHOOT</span>
@@ -3792,11 +3823,14 @@
     if (!canRecordVideo() && state.captureKind === 'video') setCaptureKind('photo');
   }
 
-  const RING_CIRCUMFERENCE = 2 * Math.PI * 46;
+  /* SVG の r と必ず一致させてください。ずれると 1 周しきらない、
+     または 1 周する前に消えます。 */
+  const RING_CIRCUMFERENCE = 2 * Math.PI * 44;
 
-  function updateRecRing(remainingRatio) {
+  function updateRecRing(remainingSec) {
+    const ratio = Math.max(0, Math.min(1, remainingSec / CONFIG.VIDEO_MAX_SEC));
     els.shutterRingArc.style.strokeDasharray = RING_CIRCUMFERENCE;
-    els.shutterRingArc.style.strokeDashoffset = RING_CIRCUMFERENCE * (1 - remainingRatio);
+    els.shutterRingArc.style.strokeDashoffset = RING_CIRCUMFERENCE * (1 - ratio);
   }
 
   async function toggleRecording() {
@@ -3851,7 +3885,7 @@
     els.modeSwitch.style.opacity = '0.4';
     setShutterAppearance();
     els.recTimer.classList.add('is-visible');
-    updateRecRing(1);
+    updateRecRing(CONFIG.VIDEO_MAX_SEC);
 
     try { recorder.start(); } catch (error) {
       console.error('[rec] start 失敗', error);
@@ -3865,7 +3899,7 @@
       const elapsed = (Date.now() - state.recordStartedAt) / 1000;
       const remaining = Math.max(0, CONFIG.VIDEO_MAX_SEC - elapsed);
       els.recTimerText.textContent = '録画中  残り ' + Math.ceil(remaining) + ' 秒';
-      updateRecRing(remaining / CONFIG.VIDEO_MAX_SEC);
+      updateRecRing(remaining);
       if (remaining <= 0) stopRecording();
     }, 100);
   }
