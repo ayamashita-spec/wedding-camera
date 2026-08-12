@@ -948,10 +948,53 @@
       background: linear-gradient(135deg, var(--neon-cyan) 0%, var(--neon-magenta) 100%);
       box-shadow: 0 0 10px rgba(0, 204, 255, 0.5);
     }
+    .modal-counter {
+      font-family: var(--dot-font); font-size: 12px;
+      color: var(--neon-text-dim); letter-spacing: 0.06em; white-space: nowrap;
+    }
+
+    /* ── プレビューの前後移動 ──────────────────────────────
+       ボタンは写真の上に重なります。写真の明るさは予測できないので、
+       塗りは濃紺の不透明寄りにし、枠と発光で輪郭を確保します。 */
+    .modal-media { position: relative; }
+    .modal-nav {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      /* 44px はタップ域の下限です。写真の上に乗るので中央の帯だけを隠します */
+      width: 44px; height: 44px; border-radius: 50%; padding: 0;
+      background: rgba(6, 9, 58, 0.88);
+      border: 1px solid var(--neon-cyan); color: var(--neon-cyan);
+      box-shadow: 0 0 10px rgba(0, 204, 255, 0.5);
+      font-family: var(--dot-font); font-size: 15px; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; z-index: 5;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .modal-nav-prev { left: 8px; }
+    .modal-nav-next { right: 8px; }
+    /* 端では押せません。ここで opacity を使ってはいけません。要素ごと薄まるため、
+       白飛びした写真の上では濃紺の塗りまで透けて「ボタンが無い」ように見えます。
+       塗りは不透明のまま残し、押せないことは中身の色だけで示します。 */
+    .modal-nav:disabled {
+      /* 枠は 0.35 まで落とすと、暗い写真の上で 2.06:1 になって消えます。
+         明るい写真は濃紺の塗りが、暗い写真はこの枠が「そこに在る」ことを
+         伝えるので、枠は 3:1 を割らない濃さに保ちます。
+         押せないことは、文字の色と発光を落とすことで示します。 */
+      /* --neon-text-dim だとシアンとの明度差が 1.13:1 しかなく、押せるかどうかが
+         見分けられません。無効な操作子に配色の下限は課されないので、はっきり
+         落とした青灰にします（シアンとの差 2.8:1）。 */
+      color: #5a6a94; border-color: rgba(0, 204, 255, 0.55);
+      box-shadow: none; cursor: default;
+    }
+    .modal-nav:active:not(:disabled) { transform: translateY(-50%) scale(0.9); }
+
     .modal-img-container {
       width: 100%; min-height: 200px; background: var(--neon-tile);
       display: flex; align-items: center; justify-content: center;
     }
+    /* 次の写真が届くまで前の写真が出たままだと、押したのに変わっていないように
+       見えます。読み込み中は薄くして「切り替わった」ことを先に伝えます。 */
+    .modal-img-container img { transition: opacity 0.15s linear; }
+    .modal-img-container.is-loading img { opacity: 0.3; }
     /* display を指定したクラスはブラウザ標準の [hidden] { display: none } に勝ちます。
        これが無いと動画を開いたときに els.modalImgWrap.hidden = true が効かず、
        高さ 200px の空っぽの箱が動画の上に残り続けます（.sheet-option と同じ罠）。 */
@@ -1452,12 +1495,26 @@
           <div class="modal-avatar" aria-hidden="true"></div>
           <span id="modalUploaderName">ゲスト</span>
         </div>
+        <!-- いま何枚目か。末尾に + が付くときは、まだ読み込んでいない先があります -->
+        <span class="modal-counter" id="modalCounter"></span>
+        <!-- 画面を見ずに使う人向け。◀▶ を押してもフォーカスはボタンに留まるため、
+             読み上げには何も伝わりません。切り替わった中身をここで知らせます。 -->
+        <span class="sr-only" id="modalAnnounce" role="status" aria-live="polite"></span>
       </div>
-      <div class="modal-img-container" id="modalImgWrap"><img id="modalImg" alt=""></div>
-      <!-- 動画は Drive のプレビューで再生します（全体をダウンロードせずに済むため） -->
-      <div class="modal-video-wrap" id="modalVideoWrap" hidden>
-        <iframe id="modalVideo" allow="autoplay; fullscreen" allowfullscreen title="動画"></iframe>
+
+      <!-- 前後移動のボタンを写真の上に重ねるための入れ物 -->
+      <div class="modal-media">
+        <div class="modal-img-container" id="modalImgWrap"><img id="modalImg" alt=""></div>
+        <!-- 動画は Drive のプレビューで再生します（全体をダウンロードせずに済むため） -->
+        <div class="modal-video-wrap" id="modalVideoWrap" hidden>
+          <iframe id="modalVideo" allow="autoplay; fullscreen" allowfullscreen title="動画"></iframe>
+        </div>
+        <button class="modal-nav modal-nav-prev" id="modalPrevBtn"
+                data-action="modal-prev" aria-label="前へ">◀</button>
+        <button class="modal-nav modal-nav-next" id="modalNextBtn"
+                data-action="modal-next" aria-label="次へ">▶</button>
       </div>
+
       <div class="modal-actions">
         <button id="modalDownloadBtn" class="download-btn">⬇️ 保存する</button>
       </div>
@@ -1744,6 +1801,18 @@
     cancelRequested: false,
     preparedFiles: null,
 
+    /* プレビューで開いている 1 枚。添字ではなく id で覚えます。
+       開いたまま ↻ で読み直すと albumImages が作り替えられるため、
+       添字だと別の写真に化けます。 */
+    modalPhotoId: null,
+
+    /* 1 枚保存の進み具合。◀▶ で離れて戻ってきたときに復元します。
+       { id, phase: 'fetching' | 'ready', file, blob, fileName }
+       これが無いと、(1) 取得中に離れて戻るとボタンが押せる状態に戻り、
+       10MB の動画を二重取得する、(2)「タップして写真に保存」まで進んだのに
+       離れると黙って捨てられ、本人は保存できたつもりになる、が起きます。 */
+    singleSave: null,
+
     /** 未送信写真を端末に保存するとき、share() 直前まで持っておくファイル */
     pendingLocalFiles: null,
 
@@ -1803,6 +1872,7 @@
     'btnRefreshAlbum', 'btnSelectToggle', 'selectionToolbar', 'selectedCountText',
     'downloadBarInfo', 'btnExecDownload',
     'imageModal', 'modalImg', 'modalUploaderName', 'modalDownloadBtn',
+    'modalPrevBtn', 'modalNextBtn', 'modalCounter', 'modalAnnounce',
     'uploadClosedNotice', 'btnOpenCamera',
     'nameModal', 'nameInput', 'nameInputHint', 'nameModalCancelBtn',
     'downloadSheet', 'sheetTitle', 'sheetSubtitle', 'optShare', 'optShareTitle', 'optZip', 'optDrive',
@@ -4730,6 +4800,9 @@
 
       els.albumMore.hidden = !state.nextPageToken;
       updateDownloadBarUI();
+      /* 「もっと見る」で件数が増えると、開いたままのプレビューの「N / 全体」も
+         端の判定も変わります。開いていなければ何もしません。 */
+      if (els.imageModal.classList.contains('is-open')) syncModalNav();
     } catch (error) {
       console.error('[album]', error);
       if (state.albumImages.length === 0) {
@@ -4911,8 +4984,86 @@
     singleSaveTimer = null;
   }
 
+  /* ── プレビューの前後移動 ──────────────────────────────
+     「何番目か」ではなく id で現在位置を持ちます。開いている間に ↻ で読み直すと
+     state.albumImages は丸ごと作り替えられるため、添字で覚えると同じ番号が
+     別の写真を指します。毎回 id から引き直せば、消えた場合も検出できます。 */
+  function currentModalIndex() {
+    if (!state.modalPhotoId) return -1;
+    return state.albumImages.findIndex((img) => img.id === state.modalPhotoId);
+  }
+
+  async function stepModal(delta) {
+    const index = currentModalIndex();
+    if (index < 0) {
+      /* 読み直しの最中は一覧が一瞬空になります。そこで閉じると、↻ を押しただけで
+         プレビューが落ちたように見えるので待ちます。 */
+      if (state.isAlbumLoading) return;
+      /* 開いている写真が一覧から消えたときは閉じます。黙って別の写真へ飛ぶより、
+         何が起きたか分かる方が親切です。 */
+      closeImageModal();
+      toast('この写真は一覧から外れました。', null, 4000);
+      return;
+    }
+
+    const next = state.albumImages[index + delta];
+    if (next) { openImageModal(next); return; }
+
+    /* 末尾で ▶。1 ページ 30 枚なので、式の写真ならここに必ず届きます。
+       何もしないと 30 枚ごとに「▶ が効かない」状態になるため、続きを読んでから
+       進みます。読み込み中に押された場合は、loadAlbum が黙って return するので
+       ここでは何もしません（終わり次第 syncModalNav でボタンが戻ります）。 */
+    if (delta > 0 && state.nextPageToken && !state.isAlbumLoading) {
+      els.modalNextBtn.disabled = true;
+      els.modalCounter.textContent = '読み込み中…';
+      await loadAlbum(false);
+      const after = currentModalIndex();
+      const target = after >= 0 ? state.albumImages[after + 1] : null;
+      if (target) openImageModal(target);
+      else syncModalNav();   // 増えなかった・失敗した場合も表示を戻します
+    }
+  }
+
+  /* 無効にするボタンにフォーカスが載っていると、ブラウザはフォーカスを
+     document.body へ飛ばします。モーダルにフォーカストラップは無いので、
+     以後 Tab がページ先頭から辿り直しになります。先に逃がします。 */
+  function moveFocusOff(button, fallbacks) {
+    if (document.activeElement !== button) return;
+    const next = fallbacks.find((el) => el && !el.disabled);
+    if (next) next.focus();
+  }
+
+  function syncModalNav() {
+    const index = currentModalIndex();
+    const total = state.albumImages.length;
+    const atEnd = index >= total - 1;
+    const prevOff = index <= 0;
+    /* 末尾でも、未読の先があるなら押せます（押すと続きを読んでから進みます） */
+    const nextOff = index < 0 || (atEnd && !state.nextPageToken);
+
+    if (prevOff) moveFocusOff(els.modalPrevBtn, [els.modalNextBtn, els.modalDownloadBtn]);
+    if (nextOff) moveFocusOff(els.modalNextBtn, [els.modalPrevBtn, els.modalDownloadBtn]);
+    els.modalPrevBtn.disabled = prevOff;
+    els.modalNextBtn.disabled = nextOff;
+
+    /* 「もっと見る」の先がまだあるときは + を付けます。総数を断定すると、
+       読み込み後に数が増えて食い違います。 */
+    const more = (state.nextPageToken || state.albumTruncated) ? '+' : '';
+    els.modalCounter.textContent = index < 0 ? '' : (index + 1) + ' / ' + total + more;
+
+    /* 読み上げ向け。見出しの「N / M」だけでは誰の何かが伝わりません。 */
+    if (index < 0) {
+      els.modalAnnounce.textContent = '';
+    } else {
+      const img = state.albumImages[index];
+      els.modalAnnounce.textContent = total + ' 件中 ' + (index + 1) + ' 件目、'
+        + (img.uploader || 'ゲスト') + ' さんの' + (img.isVideo ? '動画' : '写真');
+    }
+  }
+
   function openImageModal(imgData) {
     clearSingleSaveTimer();
+    state.modalPhotoId = imgData.id;
     els.modalUploaderName.textContent = imgData.uploader || 'ゲスト';
     const button = els.modalDownloadBtn;
     // タイマー側が「まだ同じ写真を開いているか」を確認するための目印
@@ -4922,6 +5073,7 @@
       /* 動画は Drive のプレビューで再生します。
          全体をダウンロードせずに済み、端末ごとのコーデック差も Google 側が吸収します。 */
       els.modalImgWrap.hidden = true;
+      els.modalImgWrap.classList.remove('is-loading');
       els.modalImg.src = '';
       els.modalVideoWrap.hidden = false;
       els.modalVideo.src = 'https://drive.google.com/file/d/'
@@ -4933,22 +5085,59 @@
       els.modalVideoWrap.hidden = true;
       /* iframe.src = '' は「空」ではなく、文書の URL に解決されます。つまり
          このアプリ自体が iframe の中に丸ごと読み込まれ、Service Worker の登録や
-         起動処理が二重に走ります。空にするには about:blank を使います。 */
-      els.modalVideo.src = 'about:blank';
+         起動処理が二重に走ります。空にするには about:blank を使います。
+         すでに空なら触りません。◀▶ で写真を送るたびに代入すると、そのぶん
+         iframe の遷移が積まれ、端末によっては「戻る」がそれを巻き戻すだけに
+         なってアルバムから抜けられなくなります。 */
+      if (els.modalVideo.getAttribute('src') !== 'about:blank') {
+        els.modalVideo.src = 'about:blank';
+      }
       els.modalImgWrap.hidden = false;
-      els.modalImg.src = imgData.highResUrl;
       els.modalImg.alt = (imgData.uploader || 'ゲスト') + ' さんの写真';
+      /* 会場の回線では次の 1 枚が届くまで数秒かかります。その間ずっと前の写真が
+         出ていると「押したのに変わらない」と受け取られるので、薄くして先に
+         切り替わったことを伝えます。 */
+      els.modalImgWrap.classList.add('is-loading');
+      const done = () => els.modalImgWrap.classList.remove('is-loading');
+      els.modalImg.onload = done;
+      els.modalImg.onerror = done;
+      els.modalImg.src = imgData.highResUrl;
+      // 同じ URL を入れ直したときは onload が来ないことがあります
+      if (els.modalImg.complete) done();
       button.textContent = '⬇️ 保存する';
       button.disabled = false;
       button.onclick = () => saveSinglePhoto(imgData, button);
     }
 
+    /* 保存の途中で離れて戻ってきた場合は、既定の「⬇️ 保存する」を上書きして
+       途中経過に戻します。必ずボタンを組み立て終えた後に呼びます。 */
+    restoreSaveState(imgData, button);
+
+    syncModalNav();
     openOverlay(els.imageModal);
   }
 
   function closeImageModal() {
     clearSingleSaveTimer();
     closeOverlay(els.imageModal);
+
+    /* ◀▶ で何枚も送ってから閉じると、グリッドは開いたときの位置のままです。
+       最後に見ていた写真まで送って、続きからタップできるようにします。
+       セレクタではなく走査で探すのは、id をエスケープせずに済ませるためです。 */
+    if (state.modalPhotoId) {
+      const tile = Array.prototype.find.call(els.photoGrid.children,
+        (el) => el.dataset && el.dataset.id === state.modalPhotoId);
+      if (tile && tile.scrollIntoView) {
+        try { tile.scrollIntoView({ block: 'center' }); } catch (error) { tile.scrollIntoView(); }
+      }
+    }
+
+    state.modalPhotoId = null;
+    /* 閉じるのは明確な取り止めなので、保存の途中経過も捨てます。
+       ◀▶ で離れるだけなら残します（戻ってきたら続きから）。動画は 10MB
+       あるので、閉じても抱え続けると端末のメモリを圧迫します。 */
+    state.singleSave = null;
+    els.modalImgWrap.classList.remove('is-loading');
     els.modalImg.src = '';
     // 閉じても再生が続かないように。'' はアプリ自体を読み込むので about:blank
     els.modalVideo.src = 'about:blank';
@@ -4961,11 +5150,40 @@
    * navigator.share() はユーザー操作の直後にしか呼べません。
    * そのため「取得」→「もう一度タップして保存」の 2 段構えにします。
    */
+  /** 取得済みのファイルを共有する状態にボタンを整えます（2 度目のタップ用） */
+  function armShareButton(button, saved) {
+    button.textContent = '📲 タップして写真に保存';
+    button.disabled = false;
+    button.onclick = async () => {
+      try {
+        await navigator.share({ files: [saved.file] });
+      } catch (error) {
+        if (error.name !== 'AbortError') downloadBlob(saved.blob, saved.fileName);
+      }
+    };
+  }
+
+  /* ◀▶ で離れて戻ってきたときに、保存の途中経過を復元します。
+     復元しないと、取得中のはずのボタンが押せる状態に戻って同じ動画を
+     もう一度取りに行き、また「タップして写真に保存」まで進んでいたことも
+     忘れられて、本人は保存できたつもりのまま 1 枚も保存されません。 */
+  function restoreSaveState(imgData, button) {
+    const saved = state.singleSave;
+    if (!saved || saved.id !== imgData.id) return;
+    if (saved.phase === 'fetching') {
+      button.disabled = true;
+      button.textContent = '⏳ 取得しています…';
+    } else if (saved.phase === 'ready') {
+      armShareButton(button, saved);
+    }
+  }
+
   async function saveSinglePhoto(imgData, button) {
     // 動画は GAS が付けた拡張子をそのまま使います（.jpg を強制しない）
     const type = imgData.isVideo ? (imgData.mimeType || 'video/mp4') : 'image/jpeg';
     const fileName = imgData.isVideo ? (imgData.name || 'wedding_video.mp4')
                                      : ensureJpgName(imgData.name);
+    state.singleSave = { id: imgData.id, phase: 'fetching' };
     button.disabled = true;
     button.textContent = '⏳ 取得しています…';
 
@@ -4976,23 +5194,29 @@
       const file = new File([blob], fileName, { type: type });
 
       if (canShareFiles([file])) {
-        button.textContent = '📲 タップして写真に保存';
-        button.disabled = false;
-        button.onclick = async () => {
-          try {
-            await navigator.share({ files: [file] });
-          } catch (error) {
-            if (error.name !== 'AbortError') downloadBlob(blob, fileName);
-          }
-        };
+        /* まだ 1 タップ残っています。離れても捨てないよう控えておきます。 */
+        const saved = { id: imgData.id, phase: 'ready', file: file, blob: blob, fileName: fileName };
+        state.singleSave = saved;
+        /* 取得を待っている間に ◀▶ で別の写真へ移っていたら、ボタンには触りません。
+           触ると「いま開いている写真」のボタンが、前の写真を保存するものに
+           すり替わります。iPhone はこの分岐を通るので、歯止めが無いと必ず踏みます
+           （プレビューに前後移動を足して現実的になりました）。戻ってくれば
+           restoreSaveState が同じ状態に戻します。 */
+        if (button.dataset.photoId !== imgData.id) return;
+        armShareButton(button, saved);
       } else {
+        state.singleSave = null;             // ここで完結します
         downloadBlob(blob, fileName);
+        if (button.dataset.photoId !== imgData.id) return;
         button.textContent = '✨ 保存しました';
         clearSingleSaveTimer();
         singleSaveTimer = setTimeout(() => {
           singleSaveTimer = null;
           // 別の写真に切り替わっていたら、ボタンを乗っ取らずに何もしません
           if (button.dataset.photoId !== imgData.id) return;
+          /* 離れて戻ってくる間に同じ写真の取得をやり直していたら、
+             取得中のボタンを押せる状態に戻してしまうので触りません。 */
+          if (state.singleSave) return;
           button.textContent = imgData.isVideo ? '⬇️ 動画を保存' : '⬇️ 保存する';
           button.disabled = false;
           button.onclick = () => saveSinglePhoto(imgData, button);
@@ -5000,8 +5224,13 @@
       }
     } catch (error) {
       console.error('[saveSingle]', error);
-      toast('写真を取得できませんでした。' + error.message, 'error');
-      button.textContent = '⬇️ 保存する';
+      // 失敗した写真の控えは捨てます（残すと取得中のまま復元されます）
+      if (state.singleSave && state.singleSave.id === imgData.id) state.singleSave = null;
+      // 知らせるのは、別の写真へ移っていても本人の操作の結果なので出します
+      toast((imgData.isVideo ? '動画' : '写真') + 'を取得できませんでした。' + error.message, 'error');
+      // ボタンは上と同じ理由で、いま開いている写真のものなら戻します
+      if (button.dataset.photoId !== imgData.id) return;
+      button.textContent = imgData.isVideo ? '⬇️ 動画を保存' : '⬇️ 保存する';
       button.disabled = false;
     }
   }
@@ -5347,6 +5576,8 @@
     'save-via-zip': saveViaZip,
     'save-via-drive': saveViaDrive,
     'close-image-modal': closeImageModal,
+    'modal-prev': () => stepModal(-1),
+    'modal-next': () => stepModal(1),
     'save-name': saveUserName,
     'close-name-modal': closeNameModal,
     'cancel-progress': () => { state.cancelRequested = true; els.progressText.textContent = '中止しています…'; }
@@ -5373,12 +5604,11 @@
       // 背景タップで閉じる
       const backdrop = event.target.closest('[data-close-on-backdrop]');
       if (backdrop && event.target === backdrop) {
+        /* プレビューだけは後始末が多いので closeImageModal に通します。
+           ここに同じ処理を書き写すと、片方だけ直して食い違います
+           （実際、現在位置の破棄をこちらに書き忘れる寸前でした）。 */
+        if (backdrop === els.imageModal) { closeImageModal(); return; }
         closeOverlay(backdrop);
-        if (backdrop === els.imageModal) {
-          els.modalImg.src = '';
-          els.modalVideo.src = 'about:blank';
-          clearSingleSaveTimer();
-        }
         if (backdrop === els.downloadSheet) state.preparedFiles = null;
         // 保留していた遷移先を抱えたままにしない
         if (backdrop === els.nameModal) state.pendingNavigation = null;
@@ -5394,6 +5624,19 @@
 
     els.nameInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') { event.preventDefault(); saveUserName(); }
+    });
+
+    /* プレビューを開いている間は ← → で前後へ。PC で見返すときに効きます。
+       修飾キー付きはブラウザの操作（履歴の戻る等）なので拾いません。 */
+    document.addEventListener('keydown', (event) => {
+      if (!els.imageModal.classList.contains('is-open')) return;
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      /* 押しっぱなしのキーリピートは拾いません。毎秒 30 回ぶん openImageModal が
+         走り、動画のコマに差しかかるたびに Drive のプレイヤーを読み直して
+         会場の回線を潰します。 */
+      if (event.repeat) return;
+      if (event.key === 'ArrowLeft') { event.preventDefault(); stepModal(-1); }
+      else if (event.key === 'ArrowRight') { event.preventDefault(); stepModal(1); }
     });
 
     document.addEventListener('keydown', (event) => {
