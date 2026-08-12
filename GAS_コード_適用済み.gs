@@ -44,6 +44,22 @@ const CONFIG = {
   ALBUM_PAGE_SIZE_MAX: 100,
   /** アルバム一覧のキャッシュ秒数。ゲストの同時アクセスでクォータを焼かないための緩衝材 */
   ALBUM_CACHE_SEC: 20,
+  /* 同時アクセスを 1 回の Drive 呼び出しにまとめる窓（秒）。
+
+     ALBUM_CACHE_SEC のキーにはアップロードごとに進む世代番号が入っているため、
+     披露宴中は撮影が途切れず、あのキャッシュはほぼ一度も効きません。結果として
+     ゲストの読み込みが毎回 Drive への実アクセスになり、一斉に開かれると
+     Apps Script に絞られます（実測：落ち着いていれば 1.7 秒で 30 件返るのに、
+     集中したあとは 27 秒かかったり HTTP 404 のエラーページが返ったりしました）。
+
+     そこで世代番号を含まない第 2 のキーを短い期限で置きます。アップロード直後でも
+     この秒数だけは同じ結果を配るため、80 人が同時に開いても Drive への呼び出しは
+     この窓あたり 1 回に収まります。代わりに、撮った写真がアルバムに出るまで
+     最大この秒数かかります。
+
+     ALBUM_CACHE_SEC を伸ばす（例 45 秒）方法もありますが、そちらは
+     「撮ったのに出てこない」時間がそのまま伸びるので採っていません。 */
+  ALBUM_BURST_SEC: 10,
   /** 一括 Base64 取得の 1 リクエスト上限。GAS の 6 分制限とレスポンスサイズ対策 */
   BATCH_MAX: 5,
   /** 単一ファイルの Base64 化を許す上限。巨大ファイルでタイムアウトするのを防ぐ */
@@ -412,6 +428,9 @@ function handleGetAlbum(pageToken, pageSize) {
       console.warn('[getAlbum] version read skipped:', verError.message);
     }
     const cacheKey = 'album_v' + ver + '_' + size + '_' + shortHash(pageToken);
+    /* 世代番号を含まないキー。アップロードで無効化されないので、
+       同時に開かれたぶんを 1 回の Drive 呼び出しにまとめられます。 */
+    const burstKey = 'album_burst_' + size + '_' + shortHash(pageToken);
 
     let cached = null;
     try {
@@ -422,10 +441,23 @@ function handleGetAlbum(pageToken, pageSize) {
     }
     if (cached) return JSON.parse(cached);
 
+    /* 世代つきキーが外れた（＝誰かが写真を上げた直後）としても、
+       この窓のあいだに誰かが取った結果があれば使い回します。これが無いと、
+       撮影が途切れない披露宴中はキャッシュが一度も効かず、ゲストの読み込みが
+       すべて Drive への実アクセスになって絞られます。 */
+    try {
+      const burst = cache.get(burstKey);
+      if (burst) return JSON.parse(burst);
+    } catch (cacheError) {
+      console.warn('[getAlbum] burst cache read skipped:', cacheError.message);
+    }
+
     const result = listImagesViaRestApi(getTargetFolderId(), size, pageToken);
+    const payload = JSON.stringify(result);
 
     try {
-      cache.put(cacheKey, JSON.stringify(result), CONFIG.ALBUM_CACHE_SEC);
+      cache.put(cacheKey, payload, CONFIG.ALBUM_CACHE_SEC);
+      cache.put(burstKey, payload, CONFIG.ALBUM_BURST_SEC);
     } catch (cacheError) {
       // 100KB 超はキャッシュに入りません。無視して構いません
       console.warn('[getAlbum] cache skipped:', cacheError.message);

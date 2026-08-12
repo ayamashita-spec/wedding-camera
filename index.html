@@ -902,6 +902,17 @@
        グローだけ落として塗りは残し、押せないことは薄さで示します。 */
     .btn-exec-download:disabled { opacity: 0.68; box-shadow: none; }
 
+    /* 一覧を消さずに状況だけ伝える一行。前回の控えを出しているあいだや、
+       更新に失敗したときに使います（.album-status は一覧の代わりに出る全面表示で、
+       役割が違います）。 */
+    .album-notice {
+      margin: 0; padding: 8px 14px;
+      background: rgba(6, 9, 58, 0.94); border-bottom: 1px solid var(--neon-line);
+      color: var(--neon-text-dim); font-size: 11.5px; line-height: 1.6;
+    }
+    .album-notice.is-warning { color: #ffd7d7; border-bottom-color: #ff4444; }
+    .album-notice[hidden] { display: none; }
+
     /* 空・読み込み中・失敗の案内。文章なので本文は通常書体のままにします */
     .album-status { font-size: 13px; color: var(--neon-text-dim); margin: 48px 24px; line-height: 1.8; }
     .album-status strong {
@@ -1471,6 +1482,8 @@
     </div>
 
     <div class="album-container">
+      <!-- 一覧を消さずに状況だけ伝える一行（読み込み中・古いかもしれない等） -->
+      <div id="albumNotice" class="album-notice" role="status" aria-live="polite" hidden></div>
       <div id="albumStatus" class="album-status"></div>
       <div class="insta-grid" id="photoGrid"></div>
       <div class="album-more" id="albumMore" hidden>
@@ -1672,6 +1685,23 @@
     /** アルバム 1 ページの枚数。初期表示を軽くします */
     ALBUM_PAGE_SIZE: 30,
 
+    /* --- アルバムの待ち時間 -----------------------------------------------
+       Apps Script は短時間に集中されると絞られます。実測で、落ち着いていれば
+       1.7 秒で 30 件返るのに、集中したあとは 27 秒かかったり HTTP 404 の
+       エラーページが返ったりしました。式当日にゲストが一斉に開く状況が
+       まさにこれです。
+
+       ここで共通の TIMEOUT_MS（25 秒）× READ_ATTEMPTS（3 回）を使うと、
+       25 + 1.2 + 25 + 2.4 + 25 = 約 79 秒、ゲストは「読み込んでいます…」
+       だけを見続けます。前回の一覧を先に出す作りにしたので、待たずに
+       諦めて出し直すほうが体感は良くなります。 */
+    ALBUM_TIMEOUT_MS: 15000,
+    ALBUM_ATTEMPTS: 2,
+    /** 何秒待たせたら「混み合っています」と言うか */
+    ALBUM_SLOW_HINT_MS: 5000,
+    /** 端末に残す前回の一覧（描くのは先頭ページぶんだけ） */
+    STORAGE_KEY_ALBUM_CACHE: 'wedding_album_cache',
+
     /** GAS 側 BATCH_MAX と揃えること */
     DOWNLOAD_CHUNK: 5,
 
@@ -1769,6 +1799,8 @@
     /** サーバーが全件フォールバックに落ちた／件数を打ち切った場合の申告 */
     albumDegraded: false,
     albumTruncated: false,
+    /** いま出ているのが端末の控え（＝まだ最新に置き換わっていない）か */
+    albumFromCache: false,
     isSelectMode: false,
     isAlbumLoading: false,
     /** すでにグリッドに描画済みの枚数。差分描画の基点 */
@@ -1868,7 +1900,7 @@
     'modalImgWrap', 'modalVideoWrap', 'modalVideo',
     'btnFullscreenToggle', 'fullscreenLabel', 'iconFullscreen', 'iosFsHint',
     'rotateHint', 'rotateHintOs', 'btnEnableTilt', 'btnPickPhotos', 'filePicker',
-    'albumStatus', 'photoGrid', 'albumMore', 'btnLoadMore',
+    'albumStatus', 'albumNotice', 'photoGrid', 'albumMore', 'btnLoadMore',
     'btnRefreshAlbum', 'btnSelectToggle', 'selectionToolbar', 'selectedCountText',
     'downloadBarInfo', 'btnExecDownload',
     'imageModal', 'modalImg', 'modalUploaderName', 'modalDownloadBtn',
@@ -4748,18 +4780,34 @@
       state.nextPageToken = null;
       state.albumDegraded = false;
       state.albumTruncated = false;
+      state.albumFromCache = false;
       state.selectedIds.clear();
       els.photoGrid.innerHTML = '';
       state.renderedCount = 0;
       els.albumMore.hidden = true;
       els.albumStatus.textContent = '読み込んでいます…';
+
+      /* 前回の一覧が端末に残っていれば、待たずに先に出します。
+         サーバーが絞られていると 30 秒近く「読み込んでいます…」だけが
+         続くので、そのあいだ何も見えないのを避けます。届き次第、下の
+         処理が最新の一覧で置き換えます。 */
+      if (showCachedAlbum()) {
+        setAlbumNotice('最新を確認しています…');
+      }
     }
+
+    /* 待たせている間、黙ったままにしません。何秒経ったかで文言を変えます。 */
+    const slowHint = setTimeout(() => {
+      setAlbumNotice(state.albumImages.length
+        ? '最新を確認しています…（混み合っています）'
+        : '混み合っています。もう少しお待ちください…');
+    }, CONFIG.ALBUM_SLOW_HINT_MS);
 
     try {
       const response = await callApiWithRetry('getAlbum', {
         pageToken: state.nextPageToken,
         pageSize: CONFIG.ALBUM_PAGE_SIZE
-      });
+      }, { timeout: CONFIG.ALBUM_TIMEOUT_MS }, CONFIG.ALBUM_ATTEMPTS);
 
       /* 重複の除外。サーバーが同じ写真を返しても画面が壊れないようにします
          （実際、pageToken が長いとキャッシュキーの上限を超えて全件フォールバックに
@@ -4774,6 +4822,17 @@
         toast(state.albumTruncated
           ? 'いま一部の写真だけを表示しています。↻ で読み直してください。'
           : 'いま簡易表示になっています。↻ で読み直すと最新の並びになります。', null, 8000);
+      }
+
+      /* 端末の控えを先に描いていた場合は、ここで捨てて最新で置き換えます。
+         残したまま重複除外に通すと「控えにあって最新に無い写真」（消された、
+         並びが変わった）が居座り、古いものが混ざった一覧になります。 */
+      if (reset && state.albumFromCache) {
+        state.albumFromCache = false;
+        state.albumImages = [];
+        state.selectedIds.clear();
+        els.photoGrid.innerHTML = '';
+        state.renderedCount = 0;
       }
 
       const known = new Set(state.albumImages.map((img) => img.id));
@@ -4798,6 +4857,9 @@
         renderGrid();
       }
 
+      // 次にアルバムを開いたとき、待たずに出せるよう控えます
+      if (reset) saveAlbumCache();
+
       els.albumMore.hidden = !state.nextPageToken;
       updateDownloadBarUI();
       /* 「もっと見る」で件数が増えると、開いたままのプレビューの「N / 全体」も
@@ -4811,14 +4873,70 @@
           '<strong>アルバムを読み込めませんでした</strong>' +
           '電波の状況をご確認ください。<br>' +
           '<button data-action="refresh-album">もう一度読み込む</button>';
+      } else if (state.albumFromCache) {
+        /* 端末に残っていた前回ぶんを出したまま、更新だけ失敗した状態です。
+           「読み込めません」と全消しにするより、見えているものを残して
+           古いかもしれないことだけ伝えます。 */
+        setAlbumNotice('最新を確認できませんでした。↻ でもう一度お試しください。', true);
       } else {
         toast('続きを読み込めませんでした。もう一度お試しください。', 'error');
       }
     } finally {
+      clearTimeout(slowHint);
+      if (!state.albumFromCache) clearAlbumNotice();
       state.isAlbumLoading = false;
       els.btnRefreshAlbum.disabled = false;
       els.btnLoadMore.disabled = false;
     }
+  }
+
+  /* ── 前回の一覧を端末に残す ────────────────────────────
+     Apps Script が絞られていると getAlbum は数十秒かかることがあります。
+     そのあいだ何も出ないのが「読み込み画面から動かない」の正体なので、
+     前回ぶんを先に描いてから最新に置き換えます。
+     置き場は localStorage です。30 件で 12KB 前後なので収まります
+     （IndexedDB は開くのに時間がかかることがあり、ここでは本末転倒です）。 */
+  function saveAlbumCache() {
+    try {
+      const head = state.albumImages.slice(0, CONFIG.ALBUM_PAGE_SIZE);
+      Storage.set(CONFIG.STORAGE_KEY_ALBUM_CACHE, JSON.stringify({
+        savedAt: Date.now(),
+        nextPageToken: state.nextPageToken,
+        data: head
+      }));
+    } catch (error) {
+      // 容量超過などは無視します。次回また待つだけで、壊れはしません
+      console.warn('[album] 控えを残せませんでした', error);
+    }
+  }
+
+  /** 端末の控えを描きます。描けたら true */
+  function showCachedAlbum() {
+    let cached = null;
+    try { cached = JSON.parse(Storage.get(CONFIG.STORAGE_KEY_ALBUM_CACHE) || 'null'); }
+    catch (error) { cached = null; }
+    if (!cached || !Array.isArray(cached.data) || !cached.data.length) return false;
+
+    state.albumImages = cached.data;
+    state.nextPageToken = cached.nextPageToken || null;
+    state.albumFromCache = true;
+    els.albumStatus.style.display = 'none';
+    renderGrid();
+    els.albumMore.hidden = !state.nextPageToken;
+    updateDownloadBarUI();
+    return true;
+  }
+
+  /* 一覧の上に出す一行。グリッドは消しません。 */
+  function setAlbumNotice(text, isWarning) {
+    els.albumNotice.textContent = text;
+    els.albumNotice.classList.toggle('is-warning', !!isWarning);
+    els.albumNotice.hidden = false;
+  }
+
+  function clearAlbumNotice() {
+    els.albumNotice.hidden = true;
+    els.albumNotice.classList.remove('is-warning');
   }
 
   /** タイル 1 枚を組み立てます */
