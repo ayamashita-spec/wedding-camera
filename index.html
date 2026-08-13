@@ -1645,15 +1645,8 @@
       <h2 id="sheetTitle">写真を保存</h2>
       <p id="sheetSubtitle"></p>
 
-      <button class="sheet-option is-primary" id="optShare" data-action="save-via-share" hidden>
-        <span class="sheet-option-icon" aria-hidden="true">📲</span>
-        <span>
-          <span class="sheet-option-title" id="optShareTitle">写真アプリに 1 枚ずつ保存</span>
-          <span class="sheet-option-desc" id="optShareDesc">JPG のまま、カメラロールに 1 枚ずつ入ります。おすすめ。</span>
-        </span>
-      </button>
-
-      <!-- iOS Safari は連続したダウンロードを止めるので、そこでは出しません -->
+      <!-- iOS Safari は 2 枚目以降のダウンロードを止めるので、そこでは出しません。
+           iPhone では下の「写真アプリに 1 枚ずつ保存」が同じ結果になります。 -->
       <button class="sheet-option" id="optEach" data-action="save-each" hidden>
         <span class="sheet-option-icon" aria-hidden="true">⬇️</span>
         <span>
@@ -1662,11 +1655,20 @@
         </span>
       </button>
 
-      <button class="sheet-option" id="optZip" data-action="save-via-zip">
-        <span class="sheet-option-icon" aria-hidden="true">🗂</span>
+      <button class="sheet-option" id="optShare" data-action="save-via-share" hidden>
+        <span class="sheet-option-icon" aria-hidden="true">📲</span>
         <span>
-          <span class="sheet-option-title">ZIP でまとめて保存</span>
-          <span class="sheet-option-desc">1 ファイルにまとめます。写真アプリではなく「ファイル」アプリに入ります。</span>
+          <span class="sheet-option-title" id="optShareTitle">写真アプリに 1 枚ずつ保存</span>
+          <span class="sheet-option-desc" id="optShareDesc">JPG のまま、カメラロールに 1 枚ずつ入ります。</span>
+        </span>
+      </button>
+
+      <!-- 取得できなかった写真だけをやり直します -->
+      <button class="sheet-option" id="optRetryMissing" data-action="retry-missing" hidden>
+        <span class="sheet-option-icon" aria-hidden="true">🔁</span>
+        <span>
+          <span class="sheet-option-title">取得できなかったぶんをやり直す</span>
+          <span class="sheet-option-desc" id="optRetryDesc"></span>
         </span>
       </button>
 
@@ -1921,6 +1923,11 @@
     shareBatches: null,
     shareBatchIndex: 0,
 
+    /** いま保存しようとしている写真。取得に失敗したぶんのやり直しに使います */
+    saveTargets: null,
+    /** 取得できなかった写真。ここだけをやり直せるようにします */
+    saveMissing: null,
+
     /* プレビューで開いている 1 枚。添字ではなく id で覚えます。
        開いたまま ↻ で読み直すと albumImages が作り替えられるため、
        添字だと別の写真に化けます。 */
@@ -1997,7 +2004,8 @@
     'uploadClosedNotice', 'btnOpenCamera',
     'nameModal', 'nameInput', 'nameInputHint', 'nameModalCancelBtn',
     'downloadSheet', 'sheetTitle', 'sheetSubtitle',
-    'optShare', 'optShareTitle', 'optShareDesc', 'optEach', 'optEachDesc', 'optZip', 'optDrive',
+    'optShare', 'optShareTitle', 'optShareDesc', 'optEach', 'optEachDesc',
+    'optRetryMissing', 'optRetryDesc', 'optDrive',
     'progressOverlay', 'progressText', 'progressBar', 'progressSubtext', 'btnCancelProgress',
     'toastStack'
   ];
@@ -2072,6 +2080,33 @@
 
   function canShareFiles(files) {
     return !!(navigator.canShare && navigator.share && navigator.canShare({ files }));
+  }
+
+  /**
+   * 1 回の share() に何枚渡せるかを端末に聞きます。
+   *
+   * 上限は枚数ではなく主に合計サイズで決まるため、固定値（旧 SHARE_MAX = 20）で
+   * 割ると、本当は一度に渡せる端末でも無駄に何回も分けることになります。
+   * 実際のファイルで canShare を試し、通る最大枚数を二分探索します。
+   *
+   * canShare が真でも share() が落ちることはあるので、呼び出し側で
+   * 束を半分にして試し直せるようにしてあります。
+   *
+   * @returns {number} 渡せる枚数。0 なら 1 枚も渡せません
+   */
+  function largestShareableCount(files) {
+    if (!files.length || !canShareFiles(files.slice(0, 1))) return 0;
+    if (canShareFiles(files)) return files.length;
+
+    let ok = 1;
+    let ng = files.length;
+    // 上限は 20 回で必ず収束します（1000 枚でも 10 回程度）
+    while (ng - ok > 1) {
+      const mid = Math.floor((ok + ng) / 2);
+      if (canShareFiles(files.slice(0, mid))) ok = mid;
+      else ng = mid;
+    }
+    return ok;
   }
 
   /**
@@ -5488,46 +5523,56 @@
       return;
     }
 
-    state.preparedFiles = null;
-    state.shareBatches = null;
-    state.shareBatchIndex = 0;
+    resetSaveSheetState();
+    state.saveTargets = targets;
     els.sheetTitle.textContent = targets.length + ' 枚を保存';
 
     // 空ファイルで能力判定してからボタンを出します
     const probe = new File([new Blob([new Uint8Array([0xFF, 0xD8, 0xFF])])], 'probe.jpg', { type: 'image/jpeg' });
     const canShare = canShareFiles([probe]);
-    /* 1 回の share() に渡せる枚数には上限があります。超えるぶんは束に割って
-       続きから渡せるようにしたので、枚数を理由に隠しません。以前は隠していたため、
-       21 枚以上を選ぶと ZIP と Drive しか残らず、Drive を開いた先が
-       「マイドライブ」になる、という詰まり方をしていました。 */
-    const batches = Math.ceil(targets.length / CONFIG.SHARE_MAX);
+    const ios = isIos();
 
-    /* 写真アプリに 1 枚ずつ入るのは Web Share のときだけです。ZIP は「ファイル」
-       アプリに 1 つの塊で落ちるので、ゲストが欲しいものになりません。 */
-    let subtitle = '保存方法を選んでください。';
-    if (canShare && batches > 1) {
-      subtitle = '1 回に渡せるのは ' + CONFIG.SHARE_MAX + ' 枚までなので、'
-        + batches + ' 回に分けて保存します。';
-    } else if (!canShare) {
-      subtitle = 'この端末では写真アプリへ直接渡せません。1 枚ずつダウンロードするか、'
-        + 'ZIP でまとめて保存してください。';
-    }
+    /* iPhone でも順次ダウンロードを出します。ただし入り先が違います。
+       download で保存されるのは「ファイル」アプリで、カメラロールではありません。
+       カメラロールに入れられるのは Web Share だけなので、iPhone では
+       そちらを主に置き、順次ダウンロードは行き先を明記して併記します。
+
+       なお「iOS は 2 枚目以降を必ず止める」とまでは言えません。Safari の版に
+       よって挙動が変わり、複数ダウンロードの許可を尋ねることもあります。
+       止められた場合に備えて、下の saveEachFile で結果の確認を促しています。 */
+    /* 何回に分かれるかは、実際のファイルで端末に聞かないと分かりません
+       （枚数ではなく合計サイズで決まるため）。ここでは断定せず、
+       取得が終わってから showShareBatchSheet が本当の回数を出します。 */
+    let subtitle = canShare
+      ? 'JPG を 1 枚ずつ保存します。'
+      : 'JPG を 1 枚ずつ端末に保存します。';
     if (excludedVideos > 0) {
       subtitle += '（動画 ' + excludedVideos + ' 本は対象外です。1 本ずつ保存してください）';
     }
     els.sheetSubtitle.textContent = subtitle;
 
+    els.optEach.hidden = false;
+    els.optEach.classList.toggle('is-primary', !canShare);
+    els.optEach.querySelector('.sheet-option-title').textContent = ios
+      ? '1 枚ずつ「ファイル」アプリに保存'
+      : '1 枚ずつダウンロード';
+    els.optEachDesc.textContent = ios
+      ? 'JPG を ' + targets.length + ' 枚、順番に保存します。カメラロールではなく「ファイル」アプリに入ります。'
+      : 'JPG を ' + targets.length + ' 枚、順番に保存します。';
+
     els.optShare.hidden = !canShare;
-    els.optShareTitle.textContent = '写真アプリに 1 枚ずつ保存';
-    els.optShareDesc.textContent = batches > 1
-      ? 'JPG のまま、カメラロールに 1 枚ずつ入ります。' + batches + ' 回に分けます。'
-      : 'JPG のまま、カメラロールに 1 枚ずつ入ります。おすすめ。';
+    els.optShare.classList.toggle('is-primary', canShare);
+    els.optShareTitle.textContent = ios
+      ? '写真アプリ（カメラロール）に 1 枚ずつ保存'
+      : '写真アプリに 1 枚ずつ保存';
+    els.optShareDesc.textContent = 'JPG のまま 1 枚ずつ入ります。おすすめ。';
     els.optShare.disabled = false;
 
-    /* iOS Safari は 2 枚目以降のダウンロードを止めるため、そこでは出しません。
-       出しても 1 枚しか保存されず、残りが消えたように見えます。 */
-    els.optEach.hidden = isIos();
-    els.optEachDesc.textContent = 'JPG を ' + targets.length + ' 枚、順番に保存します。';
+    /* おすすめのほうを上に並べ替えます。iPhone はカメラロールに入る Web Share、
+       それ以外は順次ダウンロードが上です。 */
+    const first = canShare ? els.optShare : els.optEach;
+    const second = canShare ? els.optEach : els.optShare;
+    first.parentNode.insertBefore(first, second);
 
     els.optDrive.hidden = !resolveDriveUrl(CONFIG.DRIVE_FOLDER_URL);
 
@@ -5543,7 +5588,8 @@
     state.preparedFiles = null;
     state.shareBatches = null;
     state.shareBatchIndex = 0;
-    els.optZip.hidden = false;
+    state.saveMissing = null;
+    els.optRetryMissing.hidden = true;
   }
 
   /**
@@ -5552,7 +5598,7 @@
    */
   async function fetchAllBlobs(targets) {
     const results = [];
-    let missing = 0;
+    const failed = [];
 
     for (let i = 0; i < targets.length; i += CONFIG.DOWNLOAD_CHUNK) {
       if (state.cancelRequested) break;
@@ -5575,20 +5621,45 @@
         chunk.forEach((img) => {
           const base64 = response.data && response.data[img.id];
           if (base64) results.push({ name: ensureJpgName(img.name), blob: base64ToBlob(base64, 'image/jpeg') });
-          else missing++;
+          else failed.push(img);
         });
       } catch (error) {
         console.warn('[bulk] チャンク失敗', error.message);
-        missing += chunk.length;
+        chunk.forEach((img) => failed.push(img));
       }
     }
 
-    if (missing > 0) toast(missing + ' 枚は取得できませんでした。', 'error', 6000);
+    /* まとめ取りが失敗したぶんを 1 枚ずつ取り直します。
+       5 枚まとめては 3MB 前後になり、混雑時はそれだけで落ちます。1 枚なら
+       通ることが多く、失敗しても 1 枚で済みます。ここが無いと、
+       1 回の取りこぼしで 5 枚まとめて欠落していました。 */
+    if (failed.length && !state.cancelRequested) {
+      const retryList = failed.slice();
+      failed.length = 0;
+      for (let i = 0; i < retryList.length; i++) {
+        if (state.cancelRequested) { failed.push(retryList[i]); continue; }
+        updateProgress('取り直しています… ' + (i + 1) + '/' + retryList.length,
+          (targets.length - retryList.length + i) / targets.length);
+        const img = retryList[i];
+        try {
+          const one = await callApiWithRetry('getSingleBase64', { fileId: img.id },
+            { timeout: CONFIG.BATCH_TIMEOUT_MS });
+          if (one.data) results.push({ name: ensureJpgName(img.name), blob: base64ToBlob(one.data, 'image/jpeg') });
+          else failed.push(img);
+        } catch (error) {
+          console.warn('[bulk] 1 枚取り直しも失敗', img.id, error.message);
+          failed.push(img);
+        }
+      }
+    }
+
+    // 取れなかったぶんは覚えておき、そこだけやり直せるようにします
+    state.saveMissing = failed.length ? failed.slice() : null;
     return results;
   }
 
-  async function saveViaShare() {
-    const targets = getDownloadTargets();
+  async function saveViaShare(list) {
+    const targets = list || getDownloadTargets();
     closeDownloadSheet();
     showProgress('取得しています…', '写真アプリに渡す準備をしています');
 
@@ -5596,23 +5667,29 @@
       const items = await fetchAllBlobs(targets);
       hideProgress();
       if (state.cancelRequested) { toast('保存を中止しました。'); return; }
-      if (items.length === 0) { toast('写真を取得できませんでした。', 'error'); return; }
+      if (items.length === 0) {
+        if (state.saveMissing) { showMissingSheet(0, state.saveMissing.length); return; }
+        toast('写真を取得できませんでした。', 'error');
+        return;
+      }
 
       const files = items.map((item) => new File([item.blob], item.name, { type: 'image/jpeg' }));
 
-      /* 1 回に渡せる枚数の上限で束に割ります。share() はユーザー操作の直後に
-         しか呼べないので、束ごとにボタンを押してもらいます。 */
-      state.shareBatches = [];
-      for (let i = 0; i < files.length; i += CONFIG.SHARE_MAX) {
-        state.shareBatches.push(files.slice(i, i + CONFIG.SHARE_MAX));
-      }
-      state.shareBatchIndex = 0;
-
-      if (!canShareFiles(state.shareBatches[0])) {
+      /* 1 回に何枚渡せるかは端末に聞きます。固定値で割ると、本当は一度に
+         渡せる端末でも無駄に分けることになります。 */
+      const per = largestShareableCount(files);
+      if (!per) {
         state.shareBatches = null;
-        toast('この端末では写真アプリへ渡せませんでした。ZIP でお試しください。', 'error');
+        toast('この端末では写真アプリへ渡せませんでした。'
+          + '「1 枚ずつ保存」をお使いください。', 'error', 7000);
         return;
       }
+
+      state.shareBatches = [];
+      for (let i = 0; i < files.length; i += per) {
+        state.shareBatches.push(files.slice(i, i + per));
+      }
+      state.shareBatchIndex = 0;
       showShareBatchSheet();
     } catch (error) {
       hideProgress();
@@ -5642,9 +5719,10 @@
     els.optShareDesc.textContent = 'JPG のまま、カメラロールに 1 枚ずつ入ります。';
     els.optShare.hidden = false;
     els.optShare.disabled = false;
+    els.optShare.classList.add('is-primary');
     // 束の途中で他の方法に移られると取りこぼすので、ここでは出しません
     els.optEach.hidden = true;
-    els.optZip.hidden = total > 1;
+    els.optRetryMissing.hidden = true;
     openOverlay(els.downloadSheet);
   }
 
@@ -5665,16 +5743,35 @@
         showShareBatchSheet();
         return;
       }
-      toast('写真アプリに保存しました。', 'success');
       state.shareBatches = null;
       state.shareBatchIndex = 0;
-      els.optZip.hidden = false;
+      /* 取得できなかったぶんが残っていれば、そこだけやり直せるようにします */
+      if (state.saveMissing && state.saveMissing.length) {
+        const done = batches.reduce((sum, b) => sum + b.length, 0);
+        showMissingSheet(done, state.saveMissing.length);
+        return;
+      }
+      toast('写真アプリに保存しました。', 'success');
     } catch (error) {
       if (error.name !== 'AbortError') {
         console.error('[share:execute]', error);
-        toast('保存できませんでした。ZIP でお試しください。', 'error');
+        /* canShare が真でも share() が落ちることがあります（端末のメモリなど）。
+           束を半分にして組み直し、もう一度試せるようにします。1 枚でも落ちる
+           場合だけ、別の方法を案内します。 */
+        if (files.length > 1) {
+          const rest = batches.slice(state.shareBatchIndex).reduce((a, b) => a.concat(b), []);
+          const half = Math.max(1, Math.floor(files.length / 2));
+          const rebuilt = [];
+          for (let i = 0; i < rest.length; i += half) rebuilt.push(rest.slice(i, i + half));
+          state.shareBatches = rebuilt;
+          state.shareBatchIndex = 0;
+          toast('一度に渡せる枚数が多すぎたので、' + half + ' 枚ずつに分け直しました。',
+            null, 6000);
+          showShareBatchSheet();
+          return;
+        }
+        toast('写真アプリへ渡せませんでした。「1 枚ずつ保存」をお使いください。', 'error', 7000);
         state.shareBatches = null;
-        els.optZip.hidden = false;
       } else {
         // 取り消しただけなので、束はそのまま残して再開できるようにします
         showShareBatchSheet();
@@ -5685,36 +5782,94 @@
   }
 
   /* 1 枚ずつダウンロードします。iOS Safari は 2 枚目以降を止めるため、
-     openDownloadSheet でこの選択肢自体を出していません。 */
-  async function saveEachFile() {
-    const targets = getDownloadTargets();
+     openDownloadSheet でこの選択肢自体を出していません。
+
+     取得と保存を 1 枚ずつ交互に行います。まとめて取ってから保存すると、
+     途中で取得に失敗したときに何も保存されないまま終わります。
+     1 枚取れたらすぐ保存すれば、取れたぶんは必ず手元に残ります。 */
+  async function saveEachFile(list) {
+    const targets = list || getDownloadTargets();
+    if (!targets.length) return;
     closeDownloadSheet();
-    showProgress('取得しています…', '1 枚ずつ保存します');
+    showProgress('保存しています… 0/' + targets.length, '1 枚ずつ端末に保存します');
 
+    const failed = [];
+    let saved = 0;
     try {
-      const items = await fetchAllBlobs(targets);
-      if (state.cancelRequested) { hideProgress(); toast('保存を中止しました。'); return; }
-      if (items.length === 0) { hideProgress(); toast('写真を取得できませんでした。', 'error'); return; }
-
-      els.btnCancelProgress.hidden = true;
-      for (let i = 0; i < items.length; i++) {
-        updateProgress('保存しています… ' + (i + 1) + '/' + items.length, (i + 1) / items.length);
-        downloadBlob(items[i].blob, items[i].name);
-        /* 間を置かないと、ブラウザが連続したダウンロードをまとめて捨てます。
-           250ms は Android Chrome / デスクトップで取りこぼしが出なかった間隔です。 */
-        await sleep(250);
+      for (let i = 0; i < targets.length; i++) {
+        if (state.cancelRequested) break;
+        const img = targets[i];
+        updateProgress('保存しています… ' + saved + '/' + targets.length, i / targets.length);
+        try {
+          const one = await callApiWithRetry('getSingleBase64', { fileId: img.id },
+            { timeout: CONFIG.BATCH_TIMEOUT_MS });
+          if (!one.data) { failed.push(img); continue; }
+          downloadBlob(base64ToBlob(one.data, 'image/jpeg'), ensureJpgName(img.name));
+          saved++;
+          /* 間を置かないと、ブラウザが連続したダウンロードをまとめて捨てます。
+             iPhone は連続ダウンロードに厳しいので長めに取ります。 */
+          await sleep(isIos() ? 700 : 250);
+        } catch (error) {
+          console.warn('[each] 取得に失敗', img.id, error.message);
+          failed.push(img);
+        }
       }
 
-      els.progressText.textContent = '✅ ' + items.length + ' 枚を保存しました';
-      els.progressSubtext.textContent = 'ダウンロードフォルダに 1 枚ずつ入っています。';
-      setTimeout(hideProgress, 2600);
+      state.saveMissing = failed.length ? failed.slice() : null;
+      els.btnCancelProgress.hidden = true;
+
+      if (state.cancelRequested) {
+        hideProgress();
+        toast(saved + ' 枚を保存したところで中止しました。');
+      } else if (failed.length) {
+        hideProgress();
+        showMissingSheet(saved, failed.length);
+      } else {
+        els.progressText.textContent = '✅ ' + saved + ' 枚を保存しました';
+        /* iPhone は Safari の版によって連続ダウンロードを止めることがあり、
+           止められてもこちらからは分かりません。黙って「保存しました」と
+           言い切らず、確認と代替手段を伝えます。 */
+        els.progressSubtext.textContent = isIos()
+          ? '「ファイル」アプリのダウンロードをご確認ください。'
+            + '枚数が足りないときは「写真アプリに 1 枚ずつ保存」をお使いください。'
+          : 'ダウンロードフォルダに 1 枚ずつ入っています。';
+        setTimeout(hideProgress, isIos() ? 5200 : 2600);
+      }
     } catch (error) {
       hideProgress();
       console.error('[each]', error);
       toast('保存できませんでした。', 'error');
     } finally {
       state.cancelRequested = false;
+      els.btnCancelProgress.hidden = false;
     }
+  }
+
+  /* 取得できなかったぶんだけをやり直せるようにします。
+     「N 枚は取得できませんでした」で終わらせると、どれが抜けたのか分からず
+     全部を取り直すしかありません。 */
+  function showMissingSheet(saved, missingCount) {
+    els.sheetTitle.textContent = saved + ' 枚を保存しました';
+    els.sheetSubtitle.textContent = missingCount + ' 枚は取得できませんでした。'
+      + '混み合っていることが多いので、少し待ってからやり直すと通ります。';
+    els.optEach.hidden = true;
+    els.optShare.hidden = true;
+    els.optRetryMissing.hidden = false;
+    els.optRetryMissing.classList.add('is-primary');
+    els.optRetryDesc.textContent = missingCount + ' 枚だけをもう一度取得します。';
+    openOverlay(els.downloadSheet);
+  }
+
+  function retryMissingSaves() {
+    const missing = state.saveMissing;
+    if (!missing || !missing.length) { closeDownloadSheet(); return; }
+    els.optRetryMissing.classList.remove('is-primary');
+    if (isIos()) {
+      // iPhone は順次ダウンロードができないので、写真アプリへ渡す経路でやり直します
+      saveViaShare(missing);
+      return;
+    }
+    saveEachFile(missing);
   }
 
   /**
@@ -5761,45 +5916,10 @@
     return jsZipPromise;
   }
 
-  async function saveViaZip() {
-    const targets = getDownloadTargets();
-    closeDownloadSheet();
-    showProgress('取得しています…', 'ZIP にまとめています');
-
-    try {
-      const JSZipLib = await loadJsZip();
-      const items = await fetchAllBlobs(targets);
-      if (state.cancelRequested) { hideProgress(); toast('保存を中止しました。'); return; }
-      if (items.length === 0) { hideProgress(); toast('写真を取得できませんでした。', 'error'); return; }
-
-      updateProgress('ZIP を作成しています…', 0.9);
-      const zip = new JSZipLib();
-      items.forEach((item, index) => {
-        // 同名衝突を避けるため連番を前置します
-        zip.file(String(index + 1).padStart(3, '0') + '_' + item.name, item.blob);
-      });
-
-      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
-      els.btnCancelProgress.hidden = true;
-      updateProgress('保存しています…', 1);
-      downloadBlob(blob, 'wedding_photos.zip');
-
-      els.progressText.textContent = '✅ 保存しました';
-      els.progressSubtext.textContent = '「ファイル」アプリのダウンロードフォルダに入っています。';
-      setTimeout(hideProgress, 2600);
-    } catch (error) {
-      hideProgress();
-      console.error('[zip]', error);
-      if (String(error.message).indexOf('jszip') === 0) {
-        toast('ZIP 機能を読み込めませんでした。1 枚ずつ保存するか Drive をお使いください。', 'error', 7000);
-      } else {
-        toast('ZIP を作成できませんでした。', 'error');
-      }
-    } finally {
-      // 中止フラグを次の操作へ持ち越さない（上の判定はすべて try の中で済んでいます）
-      state.cancelRequested = false;
-    }
-  }
+  /* アルバムの一括保存から ZIP は外しました。「ファイル」アプリに 1 つの塊で
+     落ちるだけで、ゲストが欲しい「写真アプリに JPG が 1 枚ずつ」になりません。
+     loadJsZip は残しています。表紙の「端末に保存する」と未送信分の書き出しで
+     まだ使っており、そちらは 1 つの塊で問題ない用途です。 */
 
   function saveViaDrive() {
     closeDownloadSheet();
@@ -5897,8 +6017,8 @@
     'open-download-sheet': openDownloadSheet,
     'close-download-sheet': () => { closeDownloadSheet(); resetSaveSheetState(); },
     'save-via-share': () => state.shareBatches ? executeShare() : saveViaShare(),
-    'save-each': saveEachFile,
-    'save-via-zip': saveViaZip,
+    'save-each': () => saveEachFile(),
+    'retry-missing': retryMissingSaves,
     'save-via-drive': saveViaDrive,
     'close-image-modal': closeImageModal,
     'modal-prev': () => stepModal(-1),
