@@ -1788,6 +1788,18 @@
     /** GAS 側 BATCH_MAX と揃えること */
     DOWNLOAD_CHUNK: 5,
 
+    /* 取得を何本同時に走らせるか。
+
+       GAS は 1 回の往復が重く、実測で 113KB の写真 1 枚に 5.5 秒かかりました
+       （同じ画像を Google から直接読むと 0.93 秒）。ほとんどが転送ではなく
+       GAS の起動と 302 の往復です。したがって「1 枚ずつ順番に」では
+       40 枚で 3 分半かかります。
+
+       5 枚ずつまとめ、それを数本並列に走らせると待ち時間が一気に縮みます。
+       Apps Script の同時実行上限は 30 ですが、それは全ゲストの合計なので、
+       1 台が使ってよいのはごく一部です。4 本に留めています。 */
+    DOWNLOAD_CONCURRENCY: 4,
+
     /** Web Share でまとめて渡す上限。これを超えると OS 側で失敗しがちです */
     SHARE_MAX: 20,
 
@@ -5593,41 +5605,64 @@
   }
 
   /**
-   * 対象をすべて取得します。GAS 側の BATCH_MAX に合わせて分割します。
+   * 対象を取得します。5 枚ずつまとめ、それを数本並列に走らせます。
+   *
+   * GAS は 1 往復が重く、実測で 113KB の写真 1 枚に 5.5 秒かかりました
+   * （同じ画像を Google から直接読むと 0.93 秒）。ほとんどが転送ではなく
+   * GAS の起動と 302 の往復なので、「1 枚ずつ順番に」では 40 枚で 3 分半です。
+   * まとめて・並列に取ると、往復の回数そのものが減って一気に縮みます。
+   *
+   * 取れたぶんは onReady で即座に渡します。全部揃うまで待って渡すと、
+   * 途中で失敗したときに何も手元に残りません。
+   *
+   * @param {Array} targets
+   * @param {function(Array<{name: string, blob: Blob}>)} [onReady] 取れ次第呼ばれます
    * @return {Promise<Array<{name: string, blob: Blob}>>}
    */
-  async function fetchAllBlobs(targets) {
+  async function fetchAllBlobs(targets, onReady) {
     const results = [];
     const failed = [];
+    let done = 0;
 
+    const chunks = [];
     for (let i = 0; i < targets.length; i += CONFIG.DOWNLOAD_CHUNK) {
-      if (state.cancelRequested) break;
-
-      const chunk = targets.slice(i, i + CONFIG.DOWNLOAD_CHUNK);
-      updateProgress(
-        '取得しています… ' + Math.min(i + chunk.length, targets.length) + '/' + targets.length,
-        i / targets.length
-      );
-
-      try {
-        /* 旧版はリトライ無し・タイムアウト 25 秒だったため、1 回の取りこぼしで
-           5 枚まとめて欠落していました。会場の回線では 5 枚分の Base64（3MB 前後）に
-           25 秒では届きません。 */
-        const response = await callApiWithRetry(
-          'getBatchBase64',
-          { fileIds: chunk.map((img) => img.id) },
-          { timeout: CONFIG.BATCH_TIMEOUT_MS }
-        );
-        chunk.forEach((img) => {
-          const base64 = response.data && response.data[img.id];
-          if (base64) results.push({ name: ensureJpgName(img.name), blob: base64ToBlob(base64, 'image/jpeg') });
-          else failed.push(img);
-        });
-      } catch (error) {
-        console.warn('[bulk] チャンク失敗', error.message);
-        chunk.forEach((img) => failed.push(img));
-      }
+      chunks.push(targets.slice(i, i + CONFIG.DOWNLOAD_CHUNK));
     }
+
+    const deliver = (items) => {
+      items.forEach((it) => results.push(it));
+      if (onReady && items.length) onReady(items);
+    };
+
+    let next = 0;
+    const worker = async () => {
+      while (next < chunks.length && !state.cancelRequested) {
+        const chunk = chunks[next++];
+        try {
+          const response = await callApiWithRetry(
+            'getBatchBase64',
+            { fileIds: chunk.map((img) => img.id) },
+            { timeout: CONFIG.BATCH_TIMEOUT_MS }
+          );
+          const got = [];
+          chunk.forEach((img) => {
+            const base64 = response.data && response.data[img.id];
+            if (base64) got.push({ name: ensureJpgName(img.name), blob: base64ToBlob(base64, 'image/jpeg') });
+            else failed.push(img);
+          });
+          deliver(got);
+        } catch (error) {
+          console.warn('[bulk] チャンク失敗', error.message);
+          chunk.forEach((img) => failed.push(img));
+        }
+        done += chunk.length;
+        updateProgress('取得しています… ' + Math.min(done, targets.length) + '/' + targets.length,
+          done / targets.length);
+      }
+    };
+
+    const lanes = Math.min(CONFIG.DOWNLOAD_CONCURRENCY, chunks.length) || 1;
+    await Promise.all(Array.from({ length: lanes }, worker));
 
     /* まとめ取りが失敗したぶんを 1 枚ずつ取り直します。
        5 枚まとめては 3MB 前後になり、混雑時はそれだけで落ちます。1 枚なら
@@ -5636,21 +5671,27 @@
     if (failed.length && !state.cancelRequested) {
       const retryList = failed.slice();
       failed.length = 0;
-      for (let i = 0; i < retryList.length; i++) {
-        if (state.cancelRequested) { failed.push(retryList[i]); continue; }
-        updateProgress('取り直しています… ' + (i + 1) + '/' + retryList.length,
-          (targets.length - retryList.length + i) / targets.length);
-        const img = retryList[i];
-        try {
-          const one = await callApiWithRetry('getSingleBase64', { fileId: img.id },
-            { timeout: CONFIG.BATCH_TIMEOUT_MS });
-          if (one.data) results.push({ name: ensureJpgName(img.name), blob: base64ToBlob(one.data, 'image/jpeg') });
-          else failed.push(img);
-        } catch (error) {
-          console.warn('[bulk] 1 枚取り直しも失敗', img.id, error.message);
-          failed.push(img);
+      let retried = 0;
+      let cursor = 0;
+      const retryWorker = async () => {
+        while (cursor < retryList.length && !state.cancelRequested) {
+          const img = retryList[cursor++];
+          try {
+            const one = await callApiWithRetry('getSingleBase64', { fileId: img.id },
+              { timeout: CONFIG.BATCH_TIMEOUT_MS });
+            if (one.data) deliver([{ name: ensureJpgName(img.name), blob: base64ToBlob(one.data, 'image/jpeg') }]);
+            else failed.push(img);
+          } catch (error) {
+            console.warn('[bulk] 1 枚取り直しも失敗', img.id, error.message);
+            failed.push(img);
+          }
+          retried++;
+          updateProgress('取り直しています… ' + retried + '/' + retryList.length, 1);
         }
-      }
+      };
+      const retryLanes = Math.min(CONFIG.DOWNLOAD_CONCURRENCY, retryList.length) || 1;
+      await Promise.all(Array.from({ length: retryLanes }, retryWorker));
+      retryList.slice(cursor).forEach((img) => failed.push(img));
     }
 
     // 取れなかったぶんは覚えておき、そこだけやり直せるようにします
@@ -5781,41 +5822,43 @@
     }
   }
 
-  /* 1 枚ずつダウンロードします。iOS Safari は 2 枚目以降を止めるため、
-     openDownloadSheet でこの選択肢自体を出していません。
+  /* 1 枚ずつ端末に保存します。
 
-     取得と保存を 1 枚ずつ交互に行います。まとめて取ってから保存すると、
-     途中で取得に失敗したときに何も保存されないまま終わります。
-     1 枚取れたらすぐ保存すれば、取れたぶんは必ず手元に残ります。 */
+     取得は 5 枚ずつまとめて並列に走らせ、届いたぶんから順に保存します。
+     以前は「1 枚取っては 1 枚保存」にしていましたが、GAS は 1 往復が重く
+     （実測 5.5 秒／枚）、40 枚で 3 分半かかっていました。まとめて並列に取れば
+     往復の回数が減り、届いたそばから保存するので取れたぶんは必ず手元に残ります。 */
   async function saveEachFile(list) {
     const targets = list || getDownloadTargets();
     if (!targets.length) return;
     closeDownloadSheet();
-    showProgress('保存しています… 0/' + targets.length, '1 枚ずつ端末に保存します');
+    showProgress('取得しています… 0/' + targets.length, '届いたものから 1 枚ずつ保存します');
 
-    const failed = [];
     let saved = 0;
-    try {
-      for (let i = 0; i < targets.length; i++) {
-        if (state.cancelRequested) break;
-        const img = targets[i];
-        updateProgress('保存しています… ' + saved + '/' + targets.length, i / targets.length);
-        try {
-          const one = await callApiWithRetry('getSingleBase64', { fileId: img.id },
-            { timeout: CONFIG.BATCH_TIMEOUT_MS });
-          if (!one.data) { failed.push(img); continue; }
-          downloadBlob(base64ToBlob(one.data, 'image/jpeg'), ensureJpgName(img.name));
-          saved++;
-          /* 間を置かないと、ブラウザが連続したダウンロードをまとめて捨てます。
-             iPhone は連続ダウンロードに厳しいので長めに取ります。 */
-          await sleep(isIos() ? 700 : 250);
-        } catch (error) {
-          console.warn('[each] 取得に失敗', img.id, error.message);
-          failed.push(img);
-        }
+    /* ダウンロードは間隔を空けて 1 件ずつ流します。取得は並列でも、保存は
+       立て続けにするとブラウザがまとめて捨てます。 */
+    const queue = [];
+    let pumping = false;
+    const pump = async () => {
+      if (pumping) return;
+      pumping = true;
+      while (queue.length) {
+        const item = queue.shift();
+        downloadBlob(item.blob, item.name);
+        saved++;
+        updateProgress('保存しています… ' + saved + '/' + targets.length, saved / targets.length);
+        // iPhone は連続ダウンロードに厳しいので長めに取ります
+        await sleep(isIos() ? 700 : 250);
       }
+      pumping = false;
+    };
 
-      state.saveMissing = failed.length ? failed.slice() : null;
+    try {
+      await fetchAllBlobs(targets, (items) => { items.forEach((i) => queue.push(i)); pump(); });
+      // 取得が終わっても、保存待ちが残っていれば流し切ります
+      while (queue.length || pumping) await sleep(120);
+
+      const failed = state.saveMissing || [];
       els.btnCancelProgress.hidden = true;
 
       if (state.cancelRequested) {
