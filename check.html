@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>端末チェック — Wedding Camera</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0a1040">
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a1040; --panel: rgba(6, 9, 58, 0.9);
+    --cyan: #00ccff; --yellow: #ffee00; --green: #00ee44;
+    --red: #ff4444; --text: #e0eeff; --dim: #b9c8e8;
+    --line: rgba(0, 204, 255, 0.3);
+    --dot: 'DotGothic16', 'MS Gothic', monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: 'Noto Sans JP', sans-serif; font-size: 14px; line-height: 1.7;
+  }
+  .wrap { max-width: 680px; margin: 0 auto; padding: calc(16px + env(safe-area-inset-top)) 16px calc(32px + env(safe-area-inset-bottom)); }
+  h1 { font-family: var(--dot); font-size: 20px; color: var(--yellow); margin: 0 0 4px; letter-spacing: 0.06em; }
+  .lead { color: var(--dim); font-size: 12px; margin: 0 0 20px; }
+  h2 {
+    font-family: var(--dot); font-size: 14px; color: var(--cyan);
+    margin: 26px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line);
+    letter-spacing: 0.06em;
+  }
+  .row {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 7px 0; border-bottom: 1px solid rgba(0, 204, 255, 0.12);
+  }
+  .mark { flex: none; width: 2.6em; font-family: var(--dot); font-weight: 700; }
+  .ok { color: var(--green); }
+  .ng { color: var(--red); }
+  .warn { color: var(--yellow); }
+  .info { color: var(--cyan); }
+  .name { flex: 1; }
+  .note { display: block; color: var(--dim); font-size: 11.5px; }
+  .val { flex: none; color: var(--dim); font-size: 11.5px; text-align: right; max-width: 45%; word-break: break-all; }
+  button {
+    font-family: var(--dot); letter-spacing: 0.06em; font-size: 13px; font-weight: 700;
+    background: var(--panel); color: var(--cyan); border: 1px solid var(--cyan);
+    border-radius: 6px; padding: 12px 18px; margin: 6px 6px 6px 0; cursor: pointer;
+    box-shadow: 0 0 10px rgba(0, 204, 255, 0.35); min-height: 44px;
+  }
+  button:disabled { color: #5a6a94; border-color: rgba(0, 204, 255, 0.5); box-shadow: none; }
+  button.primary { background: #ff44cc; color: #200018; border-color: #ff44cc; }
+  .summary {
+    background: var(--panel); border: 1px solid var(--cyan); border-radius: 8px;
+    padding: 12px 14px; margin: 16px 0; font-family: var(--dot); font-size: 13px;
+  }
+  .summary.bad { border-color: var(--red); }
+  #shot { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; margin-top: 10px; display: none; }
+  pre {
+    background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px; font-size: 11px; overflow-x: auto; color: var(--dim);
+    white-space: pre-wrap; word-break: break-all;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>端末チェック</h1>
+  <p class="lead">
+    Wedding Camera が必要とする機能を、この端末で 1 つずつ確かめます。
+    カメラを使う項目は許可が要るので、ボタンを押したときだけ実行します。
+    <b>結果をそのままコピーして渡せます。</b>
+  </p>
+
+  <div class="summary" id="summary">確認しています…</div>
+
+  <div id="basic"></div>
+
+  <h2>カメラを使う確認</h2>
+  <p class="lead" style="margin-bottom:10px">
+    ここだけカメラ（と録画のときはマイク）の許可が要ります。
+    実際に何が返るかは端末によって違うので、静的には分かりません。
+  </p>
+  <button id="btnCam" class="primary">カメラを確かめる</button>
+  <button id="btnRec">録画を確かめる</button>
+  <div id="camera"></div>
+  <img id="shot" alt="試し撮りの結果">
+
+  <h2>結果のコピー</h2>
+  <button id="btnCopy">結果をコピー</button>
+  <pre id="dump"></pre>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const results = [];
+  const el = (id) => document.getElementById(id);
+
+  /* 判定は 4 種類。
+     ok   … 使える
+     ng   … 使えない。アプリの機能が欠ける
+     warn … 使えないが代替がある（アプリは動く）
+     info … 良し悪しではなく事実の記録 */
+  function add(section, mark, name, note, value) {
+    results.push({ section, mark, name, note, value });
+  }
+
+  function render(section, targetId) {
+    const rows = results.filter((r) => r.section === section);
+    const box = el(targetId);
+    let html = '';
+    let lastGroup = null;
+    rows.forEach((r) => {
+      if (r.group !== lastGroup) lastGroup = r.group;
+      const label = { ok: 'OK', ng: 'NG', warn: '△', info: '—' }[r.mark];
+      html += '<div class="row"><span class="mark ' + r.mark + '">' + label + '</span>'
+        + '<span class="name">' + r.name
+        + (r.note ? '<span class="note">' + r.note + '</span>' : '')
+        + '</span>'
+        + (r.value !== undefined && r.value !== '' ? '<span class="val">' + r.value + '</span>' : '')
+        + '</div>';
+    });
+    box.insertAdjacentHTML('beforeend', html);
+  }
+
+  /* ── 端末の素性 ─────────────────────────────── */
+  const ua = navigator.userAgent;
+  const isIos = /iPad|iPhone|iPod/.test(ua)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const iosVer = (() => {
+    const m = ua.match(/OS (\d+)[_.](\d+)(?:[_.](\d+))?/);
+    if (!m) return null;
+    return { major: +m[1], minor: +m[2], text: m[1] + '.' + m[2] + (m[3] ? '.' + m[3] : '') };
+  })();
+  /* iOS 16 あたりから UA の OS 表記が実バージョンとずれることがあります。
+     参考値として扱ってください。 */
+  const atLeast = (maj, min) => {
+    if (!iosVer) return null;             // 判定できない
+    if (iosVer.major !== maj) return iosVer.major > maj;
+    return iosVer.minor >= min;
+  };
+
+  add('basic', 'info', '端末の申告', ua, '');
+  add('basic', 'info', 'iOS のバージョン（UA から推定）',
+    'UA の表記は実バージョンとずれることがあります', iosVer ? iosVer.text : '不明');
+  add('basic', 'info', '画面', '', window.innerWidth + '×' + window.innerHeight
+    + ' / dpr ' + (window.devicePixelRatio || 1));
+  add('basic', 'info', 'ホーム画面から起動しているか',
+    'アドレスバーを消すにはホーム画面に追加します',
+    (navigator.standalone === true
+      || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)) ? 'はい' : 'いいえ');
+  {
+    const inApp = /Line|FBAN|FBAV|Instagram|Twitter|MicroMessenger/i.test(ua);
+    add('basic', inApp ? 'ng' : 'ok', 'アプリ内ブラウザではないか',
+      inApp ? 'LINE などのアプリ内ブラウザではカメラが使えないことがあります。Safari で開き直してください。' : '',
+      inApp ? 'アプリ内' : 'Safari 等');
+  }
+
+  /* ── アプリが下限として要求するもの ───────────── */
+  const cssOk = (prop, val) => {
+    try { return !!(window.CSS && CSS.supports && CSS.supports(prop, val)); }
+    catch (e) { return false; }
+  };
+
+  // flex の gap は代替を用意していないので、これだけは満たす必要があります
+  const gapOk = (() => {
+    // CSS.supports('gap','1px') は grid でも真になるため、実測で確かめます
+    try {
+      const p = document.createElement('div');
+      p.style.cssText = 'display:flex;gap:20px;position:absolute;visibility:hidden;';
+      p.innerHTML = '<i style="width:10px"></i><i style="width:10px"></i>';
+      document.body.appendChild(p);
+      const w = p.getBoundingClientRect().width;
+      document.body.removeChild(p);
+      return w >= 39;      // 10 + 20 + 10
+    } catch (e) { return false; }
+  })();
+  add('basic', gapOk ? 'ok' : 'ng', 'flex の gap（iOS 14.5 以降）',
+    gapOk ? '' : 'これが無いとボタンや写真の間隔が詰まって重なります。代替は用意していません。',
+    gapOk ? '使える' : '使えない');
+
+  /* ── 代替がある（△ でもアプリは動く） ─────────── */
+  const soft = [
+    ['aspect-ratio（iOS 15 以降）', cssOk('aspect-ratio', '1 / 1'),
+      'padding 方式のフォールバックがあります'],
+    ['dvh 単位（iOS 15.4 以降）', cssOk('height', '100dvh'),
+      'vh のフォールバックがあります。アドレスバーぶん高さがずれます'],
+    ['backdrop-filter', cssOk('-webkit-backdrop-filter', 'blur(4px)') || cssOk('backdrop-filter', 'blur(4px)'),
+      'すりガラスが効かないだけで、地の色は残ります'],
+    ['position: sticky', cssOk('position', 'sticky'),
+      'アルバムの見出しが固定されなくなります'],
+    ['env(safe-area-inset)', cssOk('padding-top', 'env(safe-area-inset-top)'),
+      'ノッチに文字が食い込む可能性があります'],
+    ['CSS 変数', cssOk('color', 'var(--x)'), '配色が崩れます'],
+    ['crypto.randomUUID（iOS 15.4 以降）', !!(window.crypto && crypto.randomUUID),
+      'getRandomValues とMath.random の 2 段フォールバックがあります'],
+    ['ResizeObserver（iOS 13.4 以降）', typeof ResizeObserver !== 'undefined',
+      '無い場合はボタンの高さを固定値で扱います'],
+    ['screen.orientation（iOS 16.4 以降）', !!(window.screen && screen.orientation),
+      'window.orientation と画面比の 2 段フォールバックがあります']
+  ];
+  soft.forEach(([name, ok, note]) => add('basic', ok ? 'ok' : 'warn', name, ok ? '' : note, ok ? '使える' : '代替で動作'));
+
+  /* ── 無いと機能が欠けるもの ─────────────────── */
+  {
+    const has = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    add('basic', has ? 'ok' : 'ng', 'カメラ（getUserMedia）',
+      has ? '' : 'これが無いと撮影できません', '');
+  }
+  add('basic', typeof MediaRecorder !== 'undefined' ? 'ok' : 'warn',
+    'MediaRecorder（iOS 14.5 以降）',
+    typeof MediaRecorder !== 'undefined' ? '' : '動画モードは出ません。写真は撮れます', '');
+  {
+    let shareFiles = false;
+    try {
+      shareFiles = !!(navigator.canShare
+        && navigator.canShare({ files: [new File([new Blob(['x'])], 'a.jpg', { type: 'image/jpeg' })] }));
+    } catch (e) { shareFiles = false; }
+    add('basic', shareFiles ? 'ok' : 'warn', 'ファイルの共有（iOS 15 以降）',
+      shareFiles ? '写真アプリへ直接保存できます'
+                 : '「ファイル」アプリへのダウンロードに切り替わります', '');
+  }
+  add('basic', typeof indexedDB !== 'undefined' ? 'ok' : 'ng', 'IndexedDB',
+    typeof indexedDB !== 'undefined' ? '' : 'これが無いと未送信の写真を端末に貯められません', '');
+  {
+    let ls = false;
+    try { localStorage.setItem('__t', '1'); localStorage.removeItem('__t'); ls = true; } catch (e) { ls = false; }
+    add('basic', ls ? 'ok' : 'warn', 'localStorage',
+      ls ? '' : 'プライベートブラウズでは使えません。名前とアルバムの控えが毎回消えます', '');
+  }
+  add('basic', 'serviceWorker' in navigator ? 'ok' : 'warn',
+    'Service Worker', 'serviceWorker' in navigator ? '' : 'オフラインで開けなくなります', '');
+  add('basic', typeof caches !== 'undefined' ? 'ok' : 'warn', 'CacheStorage', '', '');
+  add('basic', typeof AbortController !== 'undefined' ? 'ok' : 'ng', 'AbortController',
+    typeof AbortController !== 'undefined' ? '' : 'これが無いと送信を中止できません', '');
+  {
+    const needPerm = typeof DeviceOrientationEvent !== 'undefined'
+      && typeof DeviceOrientationEvent.requestPermission === 'function';
+    add('basic', typeof DeviceOrientationEvent !== 'undefined' ? 'ok' : 'warn',
+      '傾きセンサー', needPerm ? 'iOS 13 以降は許可が要ります（アプリ内の案内から）' : '',
+      needPerm ? '許可が必要' : 'あり');
+  }
+  {
+    const fs = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+    add('basic', fs ? 'ok' : 'warn', '全画面 API',
+      fs ? '' : 'iPhone の Safari は全画面に対応していません。ホーム画面に追加すると同じ効果になります',
+      fs ? 'あり' : 'なし（iPhone は正常）');
+  }
+
+  render('basic', 'basic');
+
+  /* ── まとめ ─────────────────────────────────── */
+  function updateSummary() {
+    const ng = results.filter((r) => r.mark === 'ng').length;
+    const warn = results.filter((r) => r.mark === 'warn').length;
+    const box = el('summary');
+    box.className = 'summary' + (ng ? ' bad' : '');
+    box.innerHTML = ng
+      ? '<span class="ng">使えない機能が ' + ng + ' 件あります。</span>下の NG を確認してください。'
+      : '<span class="ok">必要な機能はすべて使えます。</span>'
+        + (warn ? ' 代替で動く項目が ' + warn + ' 件あります（NG ではありません）。' : '');
+    el('dump').textContent = results.map((r) =>
+      ({ ok: '[OK]  ', ng: '[NG]  ', warn: '[代替]', info: '[情報]' }[r.mark])
+      + ' ' + r.name + (r.value ? ' = ' + r.value : '')
+      + (r.note && r.mark !== 'info' ? '  ※' + r.note : '')
+      + (r.mark === 'info' && r.note ? '  ' + r.note : '')
+    ).join('\n');
+  }
+  updateSummary();
+
+  /* ── カメラの実測 ───────────────────────────── */
+  let stream = null;
+
+  async function checkCamera() {
+    const btn = el('btnCam');
+    btn.disabled = true; btn.textContent = '確かめています…';
+    try {
+      // アプリと同じ要求（写真は 4K を希望）
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
+        audio: false
+      });
+      const track = stream.getVideoTracks()[0];
+      const s = track.getSettings ? track.getSettings() : {};
+      const long = Math.max(s.width || 0, s.height || 0);
+      add('camera', 'info', '実際に返った解像度',
+        long >= 3000 ? '4K が返りました。ズームしても粗くなりにくい状態です'
+                     : '4K は返りませんでした。要求は ideal なので、出せる範囲に落ちています',
+        (s.width || '?') + '×' + (s.height || '?'));
+      add('camera', long >= 1900 ? 'ok' : 'warn', '長辺が 1920 以上か',
+        long >= 1900 ? '' : 'ズームすると粗くなります', long + 'px');
+      add('camera', 'info', 'フレームレート', '', (s.frameRate || '?') + ' fps');
+      add('camera', 'info', '使われたカメラ', '', s.facingMode || '不明');
+
+      // 端末側ズーム（iOS Safari は未対応。Android では使えます）
+      let zoom = null;
+      try {
+        const caps = track.getCapabilities ? track.getCapabilities() : {};
+        zoom = caps && caps.zoom ? caps.zoom : null;
+      } catch (e) { zoom = null; }
+      add('camera', zoom ? 'ok' : 'warn', '端末側ズーム（applyConstraints の zoom）',
+        zoom ? '画質が落ちず、録画にも効きます'
+             : 'iOS Safari は未対応です。切り出しによるデジタルズームに切り替わります（写真のみ）',
+        zoom ? (zoom.min + '〜' + zoom.max + ' 倍') : '使えない');
+
+      // 背面カメラが複数見えるか（見えれば画質を落とさず寄れます）
+      try {
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        const cams = devs.filter((d) => d.kind === 'videoinput');
+        add('camera', 'info', '見えているカメラの数',
+          cams.length > 2 ? '広角・超広角などが個別に見えています' : '',
+          cams.length + ' 台');
+        cams.forEach((c, i) => add('camera', 'info', '  カメラ ' + (i + 1), '', c.label || '(名前なし)'));
+      } catch (e) { /* 許可前は名前が空になります */ }
+
+      // 実際に 1 枚撮って、保存される絵が黒くないかを確かめます
+      const video = document.createElement('video');
+      video.srcObject = stream; video.muted = true; video.playsInline = true;
+      await video.play().catch(() => {});
+      await new Promise((r) => {
+        if (video.readyState >= 2 && video.videoWidth) return r();
+        video.addEventListener('loadedmetadata', r, { once: true });
+        setTimeout(r, 3000);
+      });
+      const cv = document.createElement('canvas');
+      cv.width = Math.min(640, video.videoWidth || 640);
+      cv.height = Math.round(cv.width * ((video.videoHeight || 480) / (video.videoWidth || 640)));
+      cv.getContext('2d').drawImage(video, 0, 0, cv.width, cv.height);
+      const data = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+      let sum = 0;
+      for (let i = 0; i < data.length; i += 4 * 97) sum += data[i] + data[i + 1] + data[i + 2];
+      const bright = sum > 0;
+      add('camera', bright ? 'ok' : 'ng', '試し撮りの絵が入っているか',
+        bright ? '' : '真っ黒でした。カメラの起動待ちか、他のアプリが占有しています', '');
+      const shot = el('shot');
+      shot.src = cv.toDataURL('image/jpeg', 0.7);
+      shot.style.display = 'block';
+      add('camera', 'ok', 'JPEG への変換', '', Math.round(shot.src.length / 1024) + 'KB 相当');
+
+      video.pause(); video.srcObject = null;
+    } catch (error) {
+      add('camera', 'ng', 'カメラを開けませんでした', String(error && error.name) + ': ' + String(error && error.message), '');
+    }
+    el('camera').innerHTML = '';
+    render('camera', 'camera');
+    updateSummary();
+    btn.textContent = 'もう一度確かめる';
+    btn.disabled = false;
+  }
+
+  async function checkRecording() {
+    const btn = el('btnRec');
+    btn.disabled = true; btn.textContent = '確かめています…';
+    try {
+      if (typeof MediaRecorder === 'undefined') throw new Error('MediaRecorder がありません');
+      // アプリと同じく、録画のときだけ音声も要求します
+      const rs = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: true
+      });
+      add('camera', rs.getAudioTracks().length ? 'ok' : 'warn', 'マイクの許可',
+        rs.getAudioTracks().length ? '' : '拒否されました。音声なしで録画します', '');
+
+      const CANDIDATES = ['video/mp4', 'video/mp4;codecs=avc1', 'video/webm;codecs=vp9',
+        'video/webm;codecs=vp8', 'video/webm'];
+      const supported = CANDIDATES.filter((m) => {
+        try { return MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m); }
+        catch (e) { return false; }
+      });
+      add('camera', supported.length ? 'ok' : 'warn', '対応している録画形式',
+        supported.length ? '' : '既定の形式で録ります', supported.join(' / ') || 'なし');
+
+      const rec = new MediaRecorder(rs, supported.length ? { mimeType: supported[0] } : undefined);
+      const chunks = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      const done = new Promise((r) => { rec.onstop = r; });
+      rec.start();
+      await new Promise((r) => setTimeout(r, 1500));
+      rec.stop();
+      await done;
+      rs.getTracks().forEach((t) => t.stop());
+
+      const size = chunks.reduce((a, b) => a + b.size, 0);
+      add('camera', size > 1000 ? 'ok' : 'ng', '1.5 秒の試し録画',
+        size > 1000 ? '' : 'データが空でした。この端末では録画できません',
+        Math.round(size / 1024) + 'KB / 形式 ' + (rec.mimeType || '不明'));
+      if (size > 0) {
+        const perSec = size / 1.5;
+        add('camera', 'info', '15 秒あたりの見込み容量',
+          '送信の上限は 10MB です', Math.round(perSec * 15 / 1024 / 1024 * 10) / 10 + 'MB');
+      }
+    } catch (error) {
+      add('camera', 'ng', '録画を確かめられませんでした',
+        String(error && error.name) + ': ' + String(error && error.message), '');
+    }
+    el('camera').innerHTML = '';
+    render('camera', 'camera');
+    updateSummary();
+    btn.textContent = 'もう一度確かめる';
+    btn.disabled = false;
+  }
+
+  el('btnCam').addEventListener('click', checkCamera);
+  el('btnRec').addEventListener('click', checkRecording);
+  el('btnCopy').addEventListener('click', async () => {
+    const text = el('dump').textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      el('btnCopy').textContent = 'コピーしました';
+    } catch (e) {
+      // クリップボードが使えない端末では選択しやすくします
+      const r = document.createRange();
+      r.selectNodeContents(el('dump'));
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      el('btnCopy').textContent = '選択しました。長押しでコピーしてください';
+    }
+  });
+
+  window.addEventListener('pagehide', () => {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+  });
+})();
+</script>
+</body>
+</html>

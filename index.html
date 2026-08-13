@@ -137,6 +137,49 @@
       overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
     }
 
+    /* ── 操作子の記号 ──────────────────────────────────────
+       ◀ ▶ ↻ ✕ ✓ ☑ 🔄 のような記号を「文字」として置くと、円の中で必ずずれます。
+       理由が 3 つあります。
+
+       1. flex の中央寄せが揃えるのは行ボックスで、字面（インク）の中心ではありません。
+          body から継承した line-height 1.7 が行ボックスを膨らませ、そのぶん字面が
+          上下にずれます
+       2. iOS では ◀（U+25C0）▶（U+25B6）が既定で絵文字として描かれます。絵文字は
+          文字と字面の大きさ・位置が違い、しかも color が効きません
+       3. --dot-font（DotGothic16）はこれらの記号を持っていません。iOS には
+          MS Gothic も無いので monospace まで落ち、書体ごとに字面がずれます
+
+       そこで単色の SVG をマスクとして敷き、色は currentColor で塗ります。
+       図形は 24x24 の中で「インクの外接矩形が中心に来る」ように作ってあり、
+       background-position: center と合わせて必ず芯が合います。 */
+    .ui-icon::before {
+      content: ''; display: block; flex: none;
+      width: var(--icon-size, 1em); height: var(--icon-size, 1em);
+      background-color: currentColor;
+      -webkit-mask-image: var(--icon); mask-image: var(--icon);
+      -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+      -webkit-mask-position: center; mask-position: center;
+      -webkit-mask-size: contain; mask-size: contain;
+    }
+    /* マスク非対応の古い WebKit では ::before が「色の付いた四角」になります。
+       その場合は記号を出さず、四角も出しません（枠と配置で用は足ります）。 */
+    @supports not ((-webkit-mask-image: none) or (mask-image: none)) {
+      .ui-icon::before { display: none; }
+    }
+
+    /* 図形の定義。インクの外接矩形が 24x24 の中心に来るよう座標を取っています。 */
+    .icon-prev    { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M16 4.5 8 12l8 7.5z'/%3E%3C/svg%3E"); }
+    .icon-next    { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8 4.5 16 12l-8 7.5z'/%3E%3C/svg%3E"); }
+    /* 円弧の下端と矢頭の上端が非対称なので、群ごと下げて芯を合わせています。
+       1.4 という値は実測で決めました（getBoundingClientRect でインクの外接矩形を
+       測り、viewBox の中心との差が 0 になる位置）。図形を触ったら測り直してください。 */
+    .icon-refresh { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg transform='translate(0 1.4)'%3E%3Cpath d='M12 5A7 7 0 1 1 5 12' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round'/%3E%3Cpath d='M12 2.2 16 5l-4 2.8z'/%3E%3C/g%3E%3C/svg%3E"); }
+    .icon-close   { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E"); }
+    .icon-check   { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5.5 12.3 9.8 16.6 18.5 7.4' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+    .icon-checkbox{ --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4.7' y='4.7' width='14.6' height='14.6' rx='3' fill='none' stroke='%23000' stroke-width='2'/%3E%3Cpath d='M8.6 12.2 11.4 15 15.9 9.6' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+    /* 前後のカメラを入れ替える印。上下に 180 度対称なので芯は自動的に合います */
+    .icon-swap    { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M4.6 10.2A7.5 7.5 0 0 1 17 7.4'/%3E%3Cpath d='M19.4 13.8A7.5 7.5 0 0 1 7 16.6'/%3E%3C/g%3E%3Cpath d='M19.4 4.2v5.2h-5.2zM4.6 19.8v-5.2h5.2z'/%3E%3C/svg%3E"); }
+
     /* 端末の写真を選ぶための <input type="file">。
        hidden / display:none にすると iOS Safari が .click() を無視してピッカーを
        開きません（Android Chrome は開くので iPhone だけ不具合に見えます）。
@@ -500,7 +543,7 @@
       display: flex; align-items: center; gap: 3px;
       padding: 2px 6px; border-radius: 10px;
       background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 9px; font-weight: 700;
-      pointer-events: none;
+      pointer-events: none; line-height: 1; --icon-size: 8px;
     }
     .modal-video-wrap {
       position: relative; width: 100%; background: #000;
@@ -525,7 +568,9 @@
       box-shadow: 0 0 8px rgba(0, 204, 255, 0.45);
       width: 44px; height: 44px; font-size: 18px; cursor: pointer;
       display: flex; align-items: center; justify-content: center;
+      padding: 0; line-height: 1;
       -webkit-tap-highlight-color: transparent;
+      --icon-size: 22px;
     }
     .switch-cam-btn[hidden] { display: none; }
 
@@ -570,7 +615,12 @@
     .recent-shot video { width: 100%; height: 100%; object-fit: cover; display: block; }
     .recent-shot .video-badge {
       position: absolute; left: 3px; bottom: 2px; z-index: 2;
-      color: #fff; font-size: 9px; text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+      color: #fff; font-size: 9px;
+      /* 印だけなので、地の明るさに負けないよう影を落とします
+         （text-shadow は SVG のマスクには効きません） */
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.95));
+      background: none; padding: 0; border-radius: 0;
+      --icon-size: 9px;
     }
     /* 送信中は少し暗く、完了したらチェックを出します */
     .recent-shot::after {
@@ -663,9 +713,14 @@
     /* 案内の本文は手順を読ませる文章なので、11px のドット書体では厳しく、
        通常の書体に戻します。枠の色とボタンでトンマナは保ちます。 */
     .camera-hint p { margin: 0; flex: 1; font-family: 'Noto Sans JP', sans-serif; }
+    /* × は数式軸の上に置かれる記号で、字面が em ボックスの視覚中心より上に来ます。
+       さらに親が --dot-font なので書体のフォールバック次第でずれ方が変わります。
+       他の閉じるボタンと形も揃うよう、同じ SVG にします。 */
     .camera-hint .hint-close {
       background: none; border: none; color: #fff; opacity: 0.7;
-      font-size: 16px; line-height: 1; padding: 2px 4px; cursor: pointer; flex: none;
+      line-height: 1; padding: 2px 4px; cursor: pointer; flex: none;
+      display: flex; align-items: center; justify-content: center;
+      --icon-size: 14px;
     }
     .camera-hint .hint-action {
       background: rgba(0, 0, 0, 0.45); border: 1px solid var(--neon-green);
@@ -733,6 +788,7 @@
       font-size: 11px; line-height: 1; cursor: pointer; flex: none;
       display: flex; align-items: center; justify-content: center;
       -webkit-tap-highlight-color: transparent;
+      --icon-size: 10px;
     }
     .queue-stop[hidden] { display: none; }
     .queue-spinner {
@@ -774,6 +830,10 @@
       box-shadow: 0 0 8px rgba(0, 204, 255, 0.4);
       font-size: 12px; font-family: var(--dot-font); letter-spacing: 1px;
       font-weight: 700; cursor: pointer; padding: 8px 14px; border-radius: 5px;
+      /* 記号と文字を同じ行の中心で揃えます。line-height を 1 にしないと、
+         継承した 1.7 が行ボックスを膨らませて記号だけ上に浮きます。 */
+      display: flex; align-items: center; gap: 6px; line-height: 1;
+      --icon-size: 11px;
     }
     .album-header-right { display: flex; align-items: center; gap: 8px; }
     .btn-icon-round {
@@ -781,6 +841,8 @@
       box-shadow: 0 0 8px rgba(0, 204, 255, 0.4);
       width: 32px; height: 32px; border-radius: 50%;
       font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+      padding: 0; line-height: 1;
+      --icon-size: 16px;
     }
     /* 無効は薄さで示しますが、濃紺の地では薄めすぎると「消えた」ように見えます。
        押せないと分かる程度に落としつつ、そこに在ることは見える濃さにします。 */
@@ -790,6 +852,8 @@
       box-shadow: 0 0 8px rgba(0, 204, 255, 0.4);
       padding: 7px 12px; border-radius: 5px; font-size: 12px; font-weight: 700; cursor: pointer;
       font-family: var(--dot-font); letter-spacing: 1px;
+      display: flex; align-items: center; gap: 6px; line-height: 1;
+      --icon-size: 14px;
     }
     /* 選択モード中はネオンで塗り、文字を濃紺に。オン/オフが一目で分かります */
     .btn-select-toggle.active {
@@ -858,6 +922,7 @@
       border-radius: 50%; border: 2px solid #fff; background: rgba(6, 9, 58, 0.88);
       box-shadow: 0 2px 5px rgba(0,0,0,0.45); z-index: 10;
       align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: bold;
+      line-height: 1; --icon-size: 12px;
     }
     .select-mode-active .select-checkbox { display: flex; }
     /* 選択中はシアンで塗ります。チェックは白のままだとシアンの上で 1.9:1 しか
@@ -975,10 +1040,11 @@
       background: rgba(6, 9, 58, 0.88);
       border: 1px solid var(--neon-cyan); color: var(--neon-cyan);
       box-shadow: 0 0 10px rgba(0, 204, 255, 0.5);
-      font-family: var(--dot-font); font-size: 15px; line-height: 1;
+      font-size: 15px; line-height: 1;
       display: flex; align-items: center; justify-content: center;
       cursor: pointer; z-index: 5;
       -webkit-tap-highlight-color: transparent;
+      --icon-size: 15px;
     }
     .modal-nav-prev { left: 8px; }
     .modal-nav-next { right: 8px; }
@@ -1042,9 +1108,13 @@
     .download-btn:disabled { opacity: 0.5; }
     .close-btn-top {
       position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 16px;
-      color: var(--neon-cyan); font-size: 32px; cursor: pointer; z-index: 20;
-      text-shadow: 0 0 10px rgba(0, 204, 255, 0.6);
+      color: var(--neon-cyan); cursor: pointer; z-index: 20;
       background: none; border: none; line-height: 1; padding: 8px;
+      /* 44px のタップ域を確保しつつ、印は中央に置きます */
+      width: 44px; height: 44px;
+      display: flex; align-items: center; justify-content: center;
+      --icon-size: 26px;
+      filter: drop-shadow(0 0 6px rgba(0, 204, 255, 0.7));
     }
 
     .name-input-field {
@@ -1304,8 +1374,8 @@
     <span class="queue-spinner" id="queueSpinner" aria-hidden="true"></span>
     <span id="queueBadgeText" role="status" aria-live="polite"></span>
     <!-- 送信が長引いたときに待たされ続けないよう、その場で止められるようにします -->
-    <button class="queue-stop" id="btnCancelUpload" data-action="cancel-uploads"
-            aria-label="送信を停止する" hidden>✕</button>
+    <button class="queue-stop ui-icon icon-close" id="btnCancelUpload" data-action="cancel-uploads"
+            aria-label="送信を停止する" hidden></button>
   </div>
 
   <!-- ══ 表紙 ══════════════════════════════════════════ -->
@@ -1401,7 +1471,8 @@
             オンにできない場合はこちら
           </button>
         </p>
-        <button class="hint-close" data-action="dismiss-rotate-hint" aria-label="この案内を閉じる">×</button>
+        <button class="hint-close ui-icon icon-close" data-action="dismiss-rotate-hint"
+                aria-label="この案内を閉じる"></button>
       </div>
 
       <!-- iPhone のみ。全画面ボタンが使えない端末への代替案内 -->
@@ -1411,7 +1482,8 @@
           画面下の共有ボタン（□に↑）→「ホーム画面に追加」。
           追加したアイコンから開くとアドレスバーが消えます。
         </p>
-        <button class="hint-close" data-action="dismiss-ios-hint" aria-label="この案内を閉じる">×</button>
+        <button class="hint-close ui-icon icon-close" data-action="dismiss-ios-hint"
+                aria-label="この案内を閉じる"></button>
       </div>
     </div>
 
@@ -1433,8 +1505,8 @@
            置いて、シャッターが画面の中央からずれないようにしています。 -->
       <div class="camera-controls">
         <div id="controlSpacerLeft" class="control-spacer" hidden></div>
-        <button class="switch-cam-btn" id="switchCamBtn" data-action="switch-camera" hidden
-                aria-label="前面・背面カメラを切り替える">🔄</button>
+        <button class="switch-cam-btn ui-icon icon-swap" id="switchCamBtn" data-action="switch-camera"
+                hidden aria-label="前面・背面カメラを切り替える"></button>
         <button class="shutter-btn-visual" id="shutterBtn" data-action="shoot" aria-label="撮影する">
           <svg class="shutter-ring" id="shutterRing" viewBox="0 0 100 100" aria-hidden="true">
             <!-- 溝（未消化ぶん）。これが無いと「満量がどこか」の基準が画面に無く、
@@ -1462,13 +1534,13 @@
   <div id="view-album" class="view-screen">
     <div class="album-sticky-head">
       <div class="album-header-bar">
-        <button class="btn-album-back" data-action="back-to-cover">◀ モード選択</button>
+        <button class="btn-album-back ui-icon icon-prev" data-action="back-to-cover">モード選択</button>
         <div class="album-header-right">
-          <button class="btn-icon-round" id="btnRefreshAlbum" data-action="refresh-album"
-                  aria-label="アルバムを再読み込みする">↻</button>
-          <button class="btn-select-toggle" id="btnSelectToggle" data-action="toggle-select-mode">
-            ☑ 選択モード
-          </button>
+          <button class="btn-icon-round ui-icon icon-refresh" id="btnRefreshAlbum"
+                  data-action="refresh-album" aria-label="アルバムを再読み込みする"></button>
+          <!-- ラベルは JS が span 側だけを書き換えます（記号を消さないため） -->
+          <button class="btn-select-toggle ui-icon icon-checkbox" id="btnSelectToggle"
+                  data-action="toggle-select-mode"><span id="selectToggleLabel">選択モード</span></button>
         </div>
       </div>
 
@@ -1501,7 +1573,7 @@
 
   <!-- ══ プレビューモーダル ════════════════════════════ -->
   <div id="imageModal" class="modal" data-close-on-backdrop>
-    <button class="close-btn-top" data-action="close-image-modal" aria-label="閉じる">×</button>
+    <button class="close-btn-top ui-icon icon-close" data-action="close-image-modal" aria-label="閉じる"></button>
     <div class="modal-content-wrapper">
       <div class="modal-header">
         <div class="modal-user-info">
@@ -1522,10 +1594,10 @@
         <div class="modal-video-wrap" id="modalVideoWrap" hidden>
           <iframe id="modalVideo" allow="autoplay; fullscreen" allowfullscreen title="動画"></iframe>
         </div>
-        <button class="modal-nav modal-nav-prev" id="modalPrevBtn"
-                data-action="modal-prev" aria-label="前へ">◀</button>
-        <button class="modal-nav modal-nav-next" id="modalNextBtn"
-                data-action="modal-next" aria-label="次へ">▶</button>
+        <button class="modal-nav modal-nav-prev ui-icon icon-prev" id="modalPrevBtn"
+                data-action="modal-prev" aria-label="前へ"></button>
+        <button class="modal-nav modal-nav-next ui-icon icon-next" id="modalNextBtn"
+                data-action="modal-next" aria-label="次へ"></button>
       </div>
 
       <div class="modal-actions">
@@ -1901,7 +1973,8 @@
     'btnFullscreenToggle', 'fullscreenLabel', 'iconFullscreen', 'iosFsHint',
     'rotateHint', 'rotateHintOs', 'btnEnableTilt', 'btnPickPhotos', 'filePicker',
     'albumStatus', 'albumNotice', 'photoGrid', 'albumMore', 'btnLoadMore',
-    'btnRefreshAlbum', 'btnSelectToggle', 'selectionToolbar', 'selectedCountText',
+    'btnRefreshAlbum', 'btnSelectToggle', 'selectToggleLabel',
+    'selectionToolbar', 'selectedCountText',
     'downloadBarInfo', 'btnExecDownload',
     'imageModal', 'modalImg', 'modalUploaderName', 'modalDownloadBtn',
     'modalPrevBtn', 'modalNextBtn', 'modalCounter', 'modalAnnounce',
@@ -3133,7 +3206,10 @@
         /* 送信が止まっているのに「送信中…」とスピナーを出し続けると、ゲストは
            待てば送られると信じて表紙の再送に辿り着きません。✕ を押した直後に
            「送信中…」が回り始めるのは、自分の停止操作との真正面からの矛盾です。 */
-        label = '⏸ ' + count + ' 件が未送信（タップで再送）';
+        /* 異体字セレクタ（U+FE0F）を付けて絵文字表示に固定します。付けないと
+         iPhone では色付き絵文字、Android では単色の文字になり、同じバッジの
+         ⚠️ と調子が揃いません。 */
+      label = '⏸️ ' + count + ' 件が未送信（タップで再送）';
       } else if (up.active) {
         const seconds = Math.floor((Date.now() - up.startedAt) / 1000);
         label = (up.isVideo ? '動画' : '写真')
@@ -3561,8 +3637,7 @@
       node.appendChild(video);
 
       const mark = document.createElement('span');
-      mark.className = 'video-badge';
-      mark.textContent = '▶';
+      mark.className = 'video-badge ui-icon icon-next';
       node.appendChild(mark);
     } else {
       const img = document.createElement('img');
@@ -4820,8 +4895,10 @@
       state.albumTruncated = !!response.truncated;
       if (state.albumDegraded && !wasDegraded) {
         toast(state.albumTruncated
-          ? 'いま一部の写真だけを表示しています。↻ で読み直してください。'
-          : 'いま簡易表示になっています。↻ で読み直すと最新の並びになります。', null, 8000);
+          /* 更新ボタンは記号だけなので、文中で ↻ と書いても図形と一致しません。
+             場所を言葉で示します。 */
+          ? 'いま一部の写真だけを表示しています。右上の更新ボタンで読み直してください。'
+          : 'いま簡易表示になっています。右上の更新ボタンで読み直すと最新の並びになります。', null, 8000);
       }
 
       /* 端末の控えを先に描いていた場合は、ここで捨てて最新で置き換えます。
@@ -4877,7 +4954,7 @@
         /* 端末に残っていた前回ぶんを出したまま、更新だけ失敗した状態です。
            「読み込めません」と全消しにするより、見えているものを残して
            古いかもしれないことだけ伝えます。 */
-        setAlbumNotice('最新を確認できませんでした。↻ でもう一度お試しください。', true);
+        setAlbumNotice('最新を確認できませんでした。右上の更新ボタンでもう一度お試しください。', true);
       } else {
         toast('続きを読み込めませんでした。もう一度お試しください。', 'error');
       }
@@ -4965,9 +5042,10 @@
       }
     };
 
+    /* ✓ や ▶ を文字で置くと、iOS では字面が中心から外れます（◀▶ は絵文字扱いに
+       なることもあります）。CSS の .ui-icon で単色 SVG を敷きます。 */
     const checkbox = document.createElement('div');
-    checkbox.className = 'select-checkbox';
-    checkbox.textContent = '✓';
+    checkbox.className = 'select-checkbox ui-icon icon-check';
     checkbox.setAttribute('aria-hidden', 'true');
 
     item.appendChild(img);
@@ -4976,8 +5054,8 @@
     if (imgData.isVideo) {
       item.setAttribute('aria-label', (imgData.uploader || 'ゲスト') + ' さんの動画');
       const badge = document.createElement('span');
-      badge.className = 'video-badge';
-      badge.textContent = '▶ 動画';
+      badge.className = 'video-badge ui-icon icon-next';
+      badge.appendChild(document.createTextNode('動画'));
       item.appendChild(badge);
     }
 
@@ -5033,11 +5111,11 @@
 
     if (state.isSelectMode) {
       els.btnSelectToggle.classList.add('active');
-      els.btnSelectToggle.textContent = '完了';
+      els.selectToggleLabel.textContent = '完了';
       els.selectionToolbar.style.display = 'flex';
     } else {
       els.btnSelectToggle.classList.remove('active');
-      els.btnSelectToggle.textContent = '☑ 選択モード';
+      els.selectToggleLabel.textContent = '選択モード';
       els.selectionToolbar.style.display = 'none';
       // 旧版は選択状態が残り、チェックマークも表示されたままでした
       state.selectedIds.clear();
