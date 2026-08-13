@@ -1648,8 +1648,17 @@
       <button class="sheet-option is-primary" id="optShare" data-action="save-via-share" hidden>
         <span class="sheet-option-icon" aria-hidden="true">📲</span>
         <span>
-          <span class="sheet-option-title" id="optShareTitle">写真アプリに保存</span>
-          <span class="sheet-option-desc">iPhone のカメラロールに直接入ります。おすすめ。</span>
+          <span class="sheet-option-title" id="optShareTitle">写真アプリに 1 枚ずつ保存</span>
+          <span class="sheet-option-desc" id="optShareDesc">JPG のまま、カメラロールに 1 枚ずつ入ります。おすすめ。</span>
+        </span>
+      </button>
+
+      <!-- iOS Safari は連続したダウンロードを止めるので、そこでは出しません -->
+      <button class="sheet-option" id="optEach" data-action="save-each" hidden>
+        <span class="sheet-option-icon" aria-hidden="true">⬇️</span>
+        <span>
+          <span class="sheet-option-title">1 枚ずつダウンロード</span>
+          <span class="sheet-option-desc" id="optEachDesc">JPG を 1 枚ずつ保存します。</span>
         </span>
       </button>
 
@@ -1664,8 +1673,8 @@
       <button class="sheet-option" id="optDrive" data-action="save-via-drive" hidden>
         <span class="sheet-option-icon" aria-hidden="true">📁</span>
         <span>
-          <span class="sheet-option-title">Google Drive で開く</span>
-          <span class="sheet-option-desc">枚数が多いときはこちらが確実です。Drive アプリから一括保存できます。</span>
+          <span class="sheet-option-title">Google ドライブのフォルダを開く</span>
+          <span class="sheet-option-desc">Drive アプリが「マイドライブ」を開いてしまうことがあります。その場合はブラウザで開き直してください。</span>
         </span>
       </button>
 
@@ -1905,6 +1914,13 @@
     cancelRequested: false,
     preparedFiles: null,
 
+    /* 写真アプリへの保存は 1 回の share() に渡せる枚数に上限があります
+       （SHARE_MAX）。上限を超えたぶんは束に割って、続きから渡せるようにします。
+       share() はユーザー操作の直後にしか呼べないため、束ごとにボタンを押して
+       もらう作りです。 */
+    shareBatches: null,
+    shareBatchIndex: 0,
+
     /* プレビューで開いている 1 枚。添字ではなく id で覚えます。
        開いたまま ↻ で読み直すと albumImages が作り替えられるため、
        添字だと別の写真に化けます。 */
@@ -1980,7 +1996,8 @@
     'modalPrevBtn', 'modalNextBtn', 'modalCounter', 'modalAnnounce',
     'uploadClosedNotice', 'btnOpenCamera',
     'nameModal', 'nameInput', 'nameInputHint', 'nameModalCancelBtn',
-    'downloadSheet', 'sheetTitle', 'sheetSubtitle', 'optShare', 'optShareTitle', 'optZip', 'optDrive',
+    'downloadSheet', 'sheetTitle', 'sheetSubtitle',
+    'optShare', 'optShareTitle', 'optShareDesc', 'optEach', 'optEachDesc', 'optZip', 'optDrive',
     'progressOverlay', 'progressText', 'progressBar', 'progressSubtext', 'btnCancelProgress',
     'toastStack'
   ];
@@ -5472,31 +5489,45 @@
     }
 
     state.preparedFiles = null;
+    state.shareBatches = null;
+    state.shareBatchIndex = 0;
     els.sheetTitle.textContent = targets.length + ' 枚を保存';
 
     // 空ファイルで能力判定してからボタンを出します
     const probe = new File([new Blob([new Uint8Array([0xFF, 0xD8, 0xFF])])], 'probe.jpg', { type: 'image/jpeg' });
     const canShare = canShareFiles([probe]);
-    const tooManyToShare = targets.length > CONFIG.SHARE_MAX;
-    const shareOk = canShare && !tooManyToShare;
+    /* 1 回の share() に渡せる枚数には上限があります。超えるぶんは束に割って
+       続きから渡せるようにしたので、枚数を理由に隠しません。以前は隠していたため、
+       21 枚以上を選ぶと ZIP と Drive しか残らず、Drive を開いた先が
+       「マイドライブ」になる、という詰まり方をしていました。 */
+    const batches = Math.ceil(targets.length / CONFIG.SHARE_MAX);
 
-    /* 写真アプリに直接入るのは Web Share のときだけです。ZIP は「ファイル」アプリに
-       落ちるので、ゲストが欲しいものになりません。選べない理由を必ず伝えます。 */
+    /* 写真アプリに 1 枚ずつ入るのは Web Share のときだけです。ZIP は「ファイル」
+       アプリに 1 つの塊で落ちるので、ゲストが欲しいものになりません。 */
     let subtitle = '保存方法を選んでください。';
-    if (canShare && tooManyToShare) {
-      subtitle = CONFIG.SHARE_MAX + ' 枚までなら写真アプリに直接保存できます。'
-        + '選択モードで ' + CONFIG.SHARE_MAX + ' 枚ずつ選ぶのがおすすめです。';
-    } else if (targets.length > 30) {
-      subtitle = '枚数が多いので Drive をおすすめします。';
+    if (canShare && batches > 1) {
+      subtitle = '1 回に渡せるのは ' + CONFIG.SHARE_MAX + ' 枚までなので、'
+        + batches + ' 回に分けて保存します。';
+    } else if (!canShare) {
+      subtitle = 'この端末では写真アプリへ直接渡せません。1 枚ずつダウンロードするか、'
+        + 'ZIP でまとめて保存してください。';
     }
     if (excludedVideos > 0) {
       subtitle += '（動画 ' + excludedVideos + ' 本は対象外です。1 本ずつ保存してください）';
     }
     els.sheetSubtitle.textContent = subtitle;
 
-    els.optShare.hidden = !shareOk;
-    els.optShareTitle.textContent = '写真アプリに保存';
+    els.optShare.hidden = !canShare;
+    els.optShareTitle.textContent = '写真アプリに 1 枚ずつ保存';
+    els.optShareDesc.textContent = batches > 1
+      ? 'JPG のまま、カメラロールに 1 枚ずつ入ります。' + batches + ' 回に分けます。'
+      : 'JPG のまま、カメラロールに 1 枚ずつ入ります。おすすめ。';
     els.optShare.disabled = false;
+
+    /* iOS Safari は 2 枚目以降のダウンロードを止めるため、そこでは出しません。
+       出しても 1 枚しか保存されず、残りが消えたように見えます。 */
+    els.optEach.hidden = isIos();
+    els.optEachDesc.textContent = 'JPG を ' + targets.length + ' 枚、順番に保存します。';
 
     els.optDrive.hidden = !resolveDriveUrl(CONFIG.DRIVE_FOLDER_URL);
 
@@ -5504,6 +5535,16 @@
   }
 
   const closeDownloadSheet = () => closeOverlay(els.downloadSheet);
+
+  /* シートを閉じたときの後始末。束を残したままにすると、次に開いたシートの
+     「タップして保存」が前回の続きを渡してしまいます。ZIP のボタンも
+     束の途中で隠しているので、必ず戻します。 */
+  function resetSaveSheetState() {
+    state.preparedFiles = null;
+    state.shareBatches = null;
+    state.shareBatchIndex = 0;
+    els.optZip.hidden = false;
+  }
 
   /**
    * 対象をすべて取得します。GAS 側の BATCH_MAX に合わせて分割します。
@@ -5558,20 +5599,21 @@
       if (items.length === 0) { toast('写真を取得できませんでした。', 'error'); return; }
 
       const files = items.map((item) => new File([item.blob], item.name, { type: 'image/jpeg' }));
-      if (!canShareFiles(files)) {
-        toast('この枚数はまとめて渡せませんでした。ZIP でお試しください。', 'error');
+
+      /* 1 回に渡せる枚数の上限で束に割ります。share() はユーザー操作の直後に
+         しか呼べないので、束ごとにボタンを押してもらいます。 */
+      state.shareBatches = [];
+      for (let i = 0; i < files.length; i += CONFIG.SHARE_MAX) {
+        state.shareBatches.push(files.slice(i, i + CONFIG.SHARE_MAX));
+      }
+      state.shareBatchIndex = 0;
+
+      if (!canShareFiles(state.shareBatches[0])) {
+        state.shareBatches = null;
+        toast('この端末では写真アプリへ渡せませんでした。ZIP でお試しください。', 'error');
         return;
       }
-
-      // share() は必ずユーザー操作の直後に呼ぶ必要があるため、
-      // シートを再表示してボタンを押してもらいます
-      state.preparedFiles = files;
-      els.sheetTitle.textContent = '準備ができました';
-      els.sheetSubtitle.textContent = items.length + ' 枚の写真を保存できます。';
-      els.optShareTitle.textContent = 'タップして写真アプリに保存';
-      els.optShare.hidden = false;
-      els.optZip.hidden = false;
-      openOverlay(els.downloadSheet);
+      showShareBatchSheet();
     } catch (error) {
       hideProgress();
       console.error('[share]', error);
@@ -5582,21 +5624,96 @@
     }
   }
 
-  async function executeShare() {
-    const files = state.preparedFiles;
-    if (!files) { saveViaShare(); return; }
+  /** 次に渡す束の案内をシートに出します */
+  function showShareBatchSheet() {
+    const batches = state.shareBatches;
+    if (!batches) return;
+    const i = state.shareBatchIndex;
+    const total = batches.length;
+    const count = batches[i].length;
 
+    els.sheetTitle.textContent = total > 1
+      ? '準備ができました（' + (i + 1) + ' / ' + total + '）'
+      : '準備ができました';
+    els.sheetSubtitle.textContent = total > 1
+      ? 'この ' + count + ' 枚を保存します。終わったら残りを続けて保存できます。'
+      : count + ' 枚の写真を保存できます。';
+    els.optShareTitle.textContent = 'タップして写真アプリに保存';
+    els.optShareDesc.textContent = 'JPG のまま、カメラロールに 1 枚ずつ入ります。';
+    els.optShare.hidden = false;
+    els.optShare.disabled = false;
+    // 束の途中で他の方法に移られると取りこぼすので、ここでは出しません
+    els.optEach.hidden = true;
+    els.optZip.hidden = total > 1;
+    openOverlay(els.downloadSheet);
+  }
+
+  async function executeShare() {
+    const batches = state.shareBatches;
+    if (!batches || !batches[state.shareBatchIndex]) { saveViaShare(); return; }
+
+    const files = batches[state.shareBatchIndex];
     closeDownloadSheet();
     try {
       await navigator.share({ files: files, title: 'Wedding Camera' });
+      state.shareBatchIndex++;
+      if (state.shareBatchIndex < batches.length) {
+        const rest = batches.slice(state.shareBatchIndex)
+          .reduce((sum, b) => sum + b.length, 0);
+        toast(files.length + ' 枚を保存しました。残り ' + rest + ' 枚を続けて保存してください。',
+          'success', 6000);
+        showShareBatchSheet();
+        return;
+      }
       toast('写真アプリに保存しました。', 'success');
+      state.shareBatches = null;
+      state.shareBatchIndex = 0;
+      els.optZip.hidden = false;
     } catch (error) {
       if (error.name !== 'AbortError') {
         console.error('[share:execute]', error);
         toast('保存できませんでした。ZIP でお試しください。', 'error');
+        state.shareBatches = null;
+        els.optZip.hidden = false;
+      } else {
+        // 取り消しただけなので、束はそのまま残して再開できるようにします
+        showShareBatchSheet();
       }
     } finally {
       state.preparedFiles = null;
+    }
+  }
+
+  /* 1 枚ずつダウンロードします。iOS Safari は 2 枚目以降を止めるため、
+     openDownloadSheet でこの選択肢自体を出していません。 */
+  async function saveEachFile() {
+    const targets = getDownloadTargets();
+    closeDownloadSheet();
+    showProgress('取得しています…', '1 枚ずつ保存します');
+
+    try {
+      const items = await fetchAllBlobs(targets);
+      if (state.cancelRequested) { hideProgress(); toast('保存を中止しました。'); return; }
+      if (items.length === 0) { hideProgress(); toast('写真を取得できませんでした。', 'error'); return; }
+
+      els.btnCancelProgress.hidden = true;
+      for (let i = 0; i < items.length; i++) {
+        updateProgress('保存しています… ' + (i + 1) + '/' + items.length, (i + 1) / items.length);
+        downloadBlob(items[i].blob, items[i].name);
+        /* 間を置かないと、ブラウザが連続したダウンロードをまとめて捨てます。
+           250ms は Android Chrome / デスクトップで取りこぼしが出なかった間隔です。 */
+        await sleep(250);
+      }
+
+      els.progressText.textContent = '✅ ' + items.length + ' 枚を保存しました';
+      els.progressSubtext.textContent = 'ダウンロードフォルダに 1 枚ずつ入っています。';
+      setTimeout(hideProgress, 2600);
+    } catch (error) {
+      hideProgress();
+      console.error('[each]', error);
+      toast('保存できませんでした。', 'error');
+    } finally {
+      state.cancelRequested = false;
     }
   }
 
@@ -5686,8 +5803,19 @@
 
   function saveViaDrive() {
     closeDownloadSheet();
+    resetSaveSheetState();
     const url = resolveDriveUrl(CONFIG.DRIVE_FOLDER_URL);
-    if (url) window.open(url, '_blank', 'noopener');
+    if (!url) return;
+
+    /* usp=sharing を付けます。これが無いと、iOS が Drive アプリを起こしたときに
+       「リンクで共有されたフォルダ」と解釈されず、アプリにログイン中のアカウントの
+       マイドライブが開くことがあります。付けても直らない端末はあるので、
+       シートの説明文でも「ブラウザで開き直してください」と伝えています。 */
+    const withShare = url.indexOf('usp=') === -1
+      ? url + (url.indexOf('?') === -1 ? '?' : '&') + 'usp=sharing'
+      : url;
+    window.open(withShare, '_blank', 'noopener');
+    toast('「マイドライブ」が開いてしまう場合は、ブラウザで開き直してください。', null, 8000);
   }
 
   /* ==========================================================================
@@ -5767,8 +5895,9 @@
       updateDownloadBarUI();
     },
     'open-download-sheet': openDownloadSheet,
-    'close-download-sheet': () => { closeDownloadSheet(); state.preparedFiles = null; },
-    'save-via-share': () => state.preparedFiles ? executeShare() : saveViaShare(),
+    'close-download-sheet': () => { closeDownloadSheet(); resetSaveSheetState(); },
+    'save-via-share': () => state.shareBatches ? executeShare() : saveViaShare(),
+    'save-each': saveEachFile,
     'save-via-zip': saveViaZip,
     'save-via-drive': saveViaDrive,
     'close-image-modal': closeImageModal,
@@ -5805,7 +5934,7 @@
            （実際、現在位置の破棄をこちらに書き忘れる寸前でした）。 */
         if (backdrop === els.imageModal) { closeImageModal(); return; }
         closeOverlay(backdrop);
-        if (backdrop === els.downloadSheet) state.preparedFiles = null;
+        if (backdrop === els.downloadSheet) resetSaveSheetState();
         // 保留していた遷移先を抱えたままにしない
         if (backdrop === els.nameModal) state.pendingNavigation = null;
       }
