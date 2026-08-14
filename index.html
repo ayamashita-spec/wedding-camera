@@ -1773,6 +1773,9 @@
        当たったら「もっと見る」で続けてください、と案内します。 */
     SELECT_ALL_MAX_PAGES: 40,
 
+    /** 枚数の表示を 1 ずつ上げるときの間隔（実際より遅れすぎない程度に速く） */
+    COUNTER_STEP_MS: 90,
+
     /* --- アルバムの待ち時間 -----------------------------------------------
        Apps Script は短時間に集中されると絞られます。実測で、落ち着いていれば
        1.7 秒で 30 件返るのに、集中したあとは 27 秒かかったり HTTP 404 の
@@ -2254,6 +2257,48 @@
     if (typeof ratio === 'number') {
       els.progressBar.style.width = Math.max(0, Math.min(100, ratio * 100)) + '%';
     }
+  }
+
+  /**
+   * 画面に出す枚数のカウンタ。
+   *
+   * 取得は 4 枚を同時に走らせているので、実際の数は 4 ずつまとめて増えます。
+   * それをそのまま書くと「5/10」がいきなり出て「10/10」へ飛び、数え落として
+   * いるように見えます。ここでは届いた数までを 1 ずつ追いかけて表示します。
+   * 表示が実際を追い越すことはなく、戻ることもありません。
+   *
+   * @param {number} total
+   * @param {function(number, number)} render (表示する数, 実際の数)
+   */
+  function createStepCounter(total, render) {
+    let shown = 0;
+    let real = 0;
+    let timer = null;
+
+    const tick = () => {
+      timer = null;
+      if (shown >= real) return;
+      shown++;
+      render(shown, real);
+      if (shown < real) timer = setTimeout(tick, CONFIG.COUNTER_STEP_MS);
+    };
+
+    return {
+      /** 実際に終わった数を伝えます。表示はここへ 1 ずつ近づきます */
+      to(n) {
+        const next = Math.min(total, Math.max(real, n));
+        if (next === real) return;
+        real = next;
+        if (!timer) tick();
+      },
+      /** 追いかけを止めて実数に合わせます。すでに追いついていれば何もしません */
+      settle() {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (shown === real) return;
+        shown = real;
+        render(shown, real);
+      }
+    };
   }
 
   const hideProgress = () => closeOverlay(els.progressOverlay);
@@ -5790,20 +5835,36 @@
    *
    * @param {Array} targets
    * @param {function(Array<{name: string, blob: Blob}>)} [onReady] 取れ次第呼ばれます
+   * @param {function(number, number)} [onFetchProgress] 進み具合の出し先を差し替えます
    * @return {Promise<Array<{name: string, blob: Blob}>>}
    */
-  async function fetchAllBlobs(targets, onReady) {
+  async function fetchAllBlobs(targets, onReady, onFetchProgress) {
     const results = [];
     const deliver = (items) => {
       items.forEach((it) => results.push(it));
       if (onReady && items.length) onReady(items);
     };
 
+    /* 取得の進み具合をどこに出すかは呼び出し側に決めてもらいます。
+       順次ダウンロードでは「保存しています… N/M」が本文の行を使うため、
+       取得のほうは補足の行に回します。同じ行を 2 つのカウンタで奪い合うと、
+       数字が行ったり来たりして飛んだように見えていました。 */
+    const counter = createStepCounter(targets.length, (shown) => {
+      updateProgress('取得しています… ' + shown + '/' + targets.length, shown / targets.length);
+    });
+    const ui = onFetchProgress || {
+      progress: (doneCount) => counter.to(doneCount),
+      note: (text) => updateProgress(text),
+      /* 取得のほうが表示より速く終わることがあります（端末に残っていた写真など）。
+         そのままだと「40/54」で止まって見えるので、最後に実数へ合わせます。 */
+      finish: () => counter.settle()
+    };
+    const finish = () => { if (ui.finish) ui.finish(); };
+
     let done = 0;
     const bump = (n) => {
-      done += n;
-      updateProgress('取得しています… ' + Math.min(done, targets.length) + '/' + targets.length,
-        done / targets.length);
+      done = Math.min(done + n, targets.length);
+      ui.progress(done, targets.length);
     };
 
     /* 第 1 段：Google から直接。ここでほぼ全部が片付きます。 */
@@ -5845,18 +5906,23 @@
 
     if (!leftovers.length || state.cancelRequested) {
       state.saveMissing = null;
+      finish();
       return results;
     }
 
     /* 第 2 段：残りを GAS から。動画と、直リンクが通らなかったぶんです。 */
-    return fetchViaGas(leftovers, deliver, bump, results);
+    try {
+      return await fetchViaGas(leftovers, deliver, bump, results, ui);
+    } finally {
+      finish();
+    }
   }
 
   /**
    * GAS 経由の取得。5 枚ずつまとめ、それを数本並列に走らせます。
    * いまは動画と、直接取れなかったぶんの受け皿です。
    */
-  async function fetchViaGas(targets, deliver, bump, results) {
+  async function fetchViaGas(targets, deliver, bump, results, ui) {
     const failed = [];
 
     /* 動画に .jpg を付けると端末で開けなくなります。ここは動画も通るので、
@@ -5921,7 +5987,7 @@
             failed.push(img);
           }
           retried++;
-          updateProgress('取り直しています… ' + retried + '/' + retryList.length, 1);
+          ui.note('取り直しています… ' + retried + '/' + retryList.length);
         }
       };
       const retryLanes = Math.min(CONFIG.DOWNLOAD_CONCURRENCY, retryList.length) || 1;
@@ -6120,11 +6186,25 @@
     const targets = list || getDownloadTargets();
     if (!targets.length) return;
     closeDownloadSheet();
-    showProgress('取得しています… 0/' + targets.length, '届いたものから 1 枚ずつ保存します');
+    showProgress('保存しています… 0/' + targets.length, '写真を集めています…');
 
     let saved = 0;
+    /* 進捗の行は「保存した枚数」だけが使います。
+       以前は取得と保存の 2 つのカウンタが同じ行に書いていたため、
+       「5/10」と「3/10」が交互に出て、数字が飛んだり戻ったりしていました。
+       取得の進み具合は下の補足行に回します。 */
+    const noteFetch = {
+      progress: (done, total) => {
+        els.progressSubtext.textContent = done >= total
+          ? '集め終わりました。残りを保存しています…'
+          : '写真を集めています… ' + done + '/' + total;
+      },
+      note: (text) => { els.progressSubtext.textContent = text; }
+    };
+
     /* ダウンロードは間隔を空けて 1 件ずつ流します。取得は並列でも、保存は
-       立て続けにするとブラウザがまとめて捨てます。 */
+       立て続けにするとブラウザがまとめて捨てます。保存は必ず 1 枚ずつ進むので、
+       表示もそのまま 1 ずつ上がります。 */
     const queue = [];
     let pumping = false;
     const pump = async () => {
@@ -6142,7 +6222,9 @@
     };
 
     try {
-      await fetchAllBlobs(targets, (items) => { items.forEach((i) => queue.push(i)); pump(); });
+      await fetchAllBlobs(targets,
+        (items) => { items.forEach((i) => queue.push(i)); pump(); },
+        noteFetch);
       // 取得が終わっても、保存待ちが残っていれば流し切ります
       while (queue.length || pumping) await sleep(120);
 
