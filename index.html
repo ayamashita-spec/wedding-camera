@@ -1645,12 +1645,12 @@
       <h2 id="sheetTitle">写真を保存</h2>
       <p id="sheetSubtitle"></p>
 
-      <!-- iOS Safari は 2 枚目以降のダウンロードを止めるので、そこでは出しません。
-           iPhone では下の「写真アプリに 1 枚ずつ保存」が同じ結果になります。 -->
+      <!-- 端末に落とす側。iPhone でも Android でも必ず出します。
+           行き先は iPhone なら「ファイル」アプリ、Android ならダウンロードです。 -->
       <button class="sheet-option" id="optEach" data-action="save-each" hidden>
         <span class="sheet-option-icon" aria-hidden="true">⬇️</span>
         <span>
-          <span class="sheet-option-title">1 枚ずつダウンロード</span>
+          <span class="sheet-option-title">端末にダウンロード</span>
           <span class="sheet-option-desc" id="optEachDesc">JPG を 1 枚ずつ保存します。</span>
         </span>
       </button>
@@ -5617,12 +5617,10 @@
 
     els.optEach.hidden = false;
     els.optEach.classList.toggle('is-primary', !canShare);
-    els.optEach.querySelector('.sheet-option-title').textContent = ios
-      ? '1 枚ずつ「ファイル」アプリに保存'
-      : '1 枚ずつダウンロード';
-    els.optEachDesc.textContent = ios
-      ? 'JPG を ' + targets.length + ' 枚、順番に保存します。カメラロールではなく「ファイル」アプリに入ります。'
-      : 'JPG を ' + targets.length + ' 枚、順番に保存します。';
+    els.optEach.querySelector('.sheet-option-title').textContent = '端末にダウンロード';
+    els.optEachDesc.textContent = 'JPG を ' + targets.length + ' 枚、順番に落とします。'
+      + (ios ? '「ファイル」アプリの「ダウンロード」に入ります。'
+             : '端末のダウンロードに入ります。');
 
     els.optShare.hidden = !canShare;
     els.optShare.classList.toggle('is-primary', canShare);
@@ -5902,7 +5900,7 @@
       if (!per) {
         state.shareBatches = null;
         toast('この端末では写真アプリへ渡せませんでした。'
-          + '「1 枚ずつ保存」をお使いください。', 'error', 7000);
+          + '「端末にダウンロード」をお使いください。', 'error', 7000);
         return;
       }
 
@@ -5941,10 +5939,63 @@
     els.optShare.hidden = false;
     els.optShare.disabled = false;
     els.optShare.classList.add('is-primary');
-    // 束の途中で他の方法に移られると取りこぼすので、ここでは出しません
-    els.optEach.hidden = true;
+
+    /* 端末に落とす道もここに残します。写真はもう手元にあるので、
+       取り直しは起きません（残りをそのまま落とすだけです）。
+       以前はここで隠していましたが、「写真アプリに保存」しか出ないため
+       ダウンロードしたい人の行き場が無くなっていました。 */
+    const rest = batches.slice(i).reduce((sum, b) => sum + b.length, 0);
+    els.optEach.hidden = false;
+    els.optEach.classList.remove('is-primary');
+    els.optEach.querySelector('.sheet-option-title').textContent = '端末にダウンロード';
+    els.optEachDesc.textContent = (total > 1 ? '残りの ' : '')
+      + rest + ' 枚をまとめて端末に落とします。取り直しはしません。';
+
     els.optRetryMissing.hidden = true;
     openOverlay(els.downloadSheet);
+  }
+
+  /**
+   * 写真アプリ用に用意ぶんを、そのまま端末へ落とします。
+   * すでに手元にある File を流すだけなので、取得は一切走りません。
+   */
+  function downloadPreparedFiles() {
+    const batches = state.shareBatches;
+    if (!batches) { saveEachFile(); return; }
+    const rest = batches.slice(state.shareBatchIndex)
+      .reduce((a, b) => a.concat(b), []);
+    state.shareBatches = null;
+    state.shareBatchIndex = 0;
+    state.preparedFiles = null;
+    closeDownloadSheet();
+    return pumpDownloads(rest.map((f) => ({ name: f.name, blob: f })));
+  }
+
+  /**
+   * 手元の写真を、間隔を空けて 1 件ずつ端末に落とします。
+   * 立て続けに流すとブラウザがまとめて捨てるため、必ず間隔を空けます。
+   */
+  async function pumpDownloads(items) {
+    if (!items.length) return;
+    showProgress('保存しています… 0/' + items.length,
+      isIos() ? '「ファイル」アプリに 1 枚ずつ入ります' : 'ダウンロードに 1 枚ずつ入ります');
+    let saved = 0;
+    for (const item of items) {
+      if (state.cancelRequested) break;
+      downloadBlob(item.blob, item.name);
+      saved++;
+      updateProgress('保存しています… ' + saved + '/' + items.length, saved / items.length);
+      // iPhone は連続ダウンロードに厳しいので長めに取ります
+      await sleep(isIos() ? 700 : 250);
+    }
+    hideProgress();
+    if (state.cancelRequested) {
+      state.cancelRequested = false;
+      toast(saved + ' 枚まで保存しました。');
+      return;
+    }
+    toast(saved + ' 枚を保存しました。'
+      + (isIos() ? '「ファイル」アプリのダウンロードをご確認ください。' : ''), 'success', 6000);
   }
 
   async function executeShare() {
@@ -5991,7 +6042,7 @@
           showShareBatchSheet();
           return;
         }
-        toast('写真アプリへ渡せませんでした。「1 枚ずつ保存」をお使いください。', 'error', 7000);
+        toast('写真アプリへ渡せませんでした。「端末にダウンロード」をお使いください。', 'error', 7000);
         state.shareBatches = null;
       } else {
         // 取り消しただけなので、束はそのまま残して再開できるようにします
@@ -6240,7 +6291,8 @@
     'open-download-sheet': openDownloadSheet,
     'close-download-sheet': () => { closeDownloadSheet(); resetSaveSheetState(); },
     'save-via-share': () => state.shareBatches ? executeShare() : saveViaShare(),
-    'save-each': () => saveEachFile(),
+    // 束の途中なら、手元のぶんをそのまま落とします（取り直しません）
+    'save-each': () => state.shareBatches ? downloadPreparedFiles() : saveEachFile(),
     'retry-missing': retryMissingSaves,
     'save-via-drive': saveViaDrive,
     'close-image-modal': closeImageModal,
