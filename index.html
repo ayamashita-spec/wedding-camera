@@ -6186,21 +6186,17 @@
     const targets = list || getDownloadTargets();
     if (!targets.length) return;
     closeDownloadSheet();
-    showProgress('保存しています… 0/' + targets.length, '写真を集めています…');
+    showProgress('保存しています… 0/' + targets.length,
+      isIos() ? '「ファイル」アプリに 1 枚ずつ入ります'
+              : 'ダウンロードに 1 枚ずつ入ります');
 
     let saved = 0;
-    /* 進捗の行は「保存した枚数」だけが使います。
-       以前は取得と保存の 2 つのカウンタが同じ行に書いていたため、
-       「5/10」と「3/10」が交互に出て、数字が飛んだり戻ったりしていました。
-       取得の進み具合は下の補足行に回します。 */
-    const noteFetch = {
-      progress: (done, total) => {
-        els.progressSubtext.textContent = done >= total
-          ? '集め終わりました。残りを保存しています…'
-          : '写真を集めています… ' + done + '/' + total;
-      },
-      note: (text) => { els.progressSubtext.textContent = text; }
-    };
+    /* 出す数字は「保存した枚数」ひとつだけにします。
+       取得の進み具合は出しません。以前は取得と保存の 2 つが同じ行に書いていて
+       「5/10」と「3/10」が交互に出ていましたし、行を分けても数字が 2 つ並ぶと
+       どちらを見ればよいのか分かりません。取得は保存の前段でしかないので、
+       黙って進めます。 */
+    const quiet = { progress: () => {}, note: () => {} };
 
     /* ダウンロードは間隔を空けて 1 件ずつ流します。取得は並列でも、保存は
        立て続けにするとブラウザがまとめて捨てます。保存は必ず 1 枚ずつ進むので、
@@ -6224,7 +6220,7 @@
     try {
       await fetchAllBlobs(targets,
         (items) => { items.forEach((i) => queue.push(i)); pump(); },
-        noteFetch);
+        quiet);
       // 取得が終わっても、保存待ちが残っていれば流し切ります
       while (queue.length || pumping) await sleep(120);
 
