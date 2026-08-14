@@ -1547,7 +1547,7 @@
       <div class="selection-toolbar" id="selectionToolbar">
         <span id="selectedCountText">0 枚選択中</span>
         <div class="selection-toolbar-btns">
-          <button class="btn-sub-action" data-action="select-all">表示中をすべて選択</button>
+          <button class="btn-sub-action" id="btnSelectAll" data-action="select-all">すべて選択</button>
           <button class="btn-sub-action" data-action="deselect-all">選択を解除</button>
         </div>
       </div>
@@ -1767,6 +1767,11 @@
 
     /** アルバム 1 ページの枚数。初期表示を軽くします */
     ALBUM_PAGE_SIZE: 30,
+
+    /* 「すべて選択」で最大何ページたどるか。30 枚 × 40 = 1200 枚ぶんです。
+       1 ページごとに GAS を 1 回呼ぶので、無制限にはしません。ここに
+       当たったら「もっと見る」で続けてください、と案内します。 */
+    SELECT_ALL_MAX_PAGES: 40,
 
     /* --- アルバムの待ち時間 -----------------------------------------------
        Apps Script は短時間に集中されると絞られます。実測で、落ち着いていれば
@@ -2055,7 +2060,7 @@
     'rotateHint', 'rotateHintOs', 'btnEnableTilt', 'btnPickPhotos', 'filePicker',
     'albumStatus', 'albumNotice', 'photoGrid', 'albumMore', 'btnLoadMore',
     'btnRefreshAlbum', 'btnSelectToggle', 'selectToggleLabel',
-    'selectionToolbar', 'selectedCountText',
+    'selectionToolbar', 'selectedCountText', 'btnSelectAll',
     'downloadBarInfo', 'btnExecDownload',
     'imageModal', 'modalImg', 'modalUploaderName', 'modalDownloadBtn',
     'modalPrevBtn', 'modalNextBtn', 'modalCounter', 'modalAnnounce',
@@ -4989,8 +4994,13 @@
     }, CONFIG.ALBUM_SLOW_HINT_MS);
 
     try {
+      /* 読み直しのときは必ず先頭から取ります。
+         この直前の showCachedAlbum() が、端末の控えに入っていた「続きの位置」を
+         state.nextPageToken に書き戻します。それをそのまま送ると、読み直しなのに
+         途中のページから取りに行き、しかも下の reset 処理で控えを捨てるため、
+         先頭ぶん（＝いちばん新しい写真）が一覧から丸ごと消えていました。 */
       const response = await callApiWithRetry('getAlbum', {
-        pageToken: state.nextPageToken,
+        pageToken: reset ? null : state.nextPageToken,
         pageSize: CONFIG.ALBUM_PAGE_SIZE
       }, { timeout: CONFIG.ALBUM_TIMEOUT_MS }, CONFIG.ALBUM_ATTEMPTS);
 
@@ -5235,6 +5245,53 @@
     els.photoGrid.classList.toggle('select-mode-active', state.isSelectMode);
     syncSelectionUI();
     updateDownloadBarUI();
+  }
+
+  /**
+   * すべて選択。まだ読み込んでいないページがあれば、先に全部たどります。
+   *
+   * 一覧は 30 枚ずつしか手元に持っていないので、以前の「表示中をすべて選択」は
+   * 画面に出ているぶんしか選べませんでした。200 枚あっても「もっと見る」を
+   * 押した回数ぶんしか保存できず、保存枚数に上限があるように見えていました。
+   * 保存側には枚数の上限はありません。ここが実質の上限でした。
+   */
+  const LOADING_REST = '残りを読み込んでいます…';
+
+  async function selectAllPhotos() {
+    const pick = () => {
+      // 動画はまとめて保存できないので選択対象から外します
+      state.albumImages.forEach((img) => { if (!img.isVideo) state.selectedIds.add(img.id); });
+      syncSelectionUI();
+      updateDownloadBarUI();
+    };
+
+    pick();
+    if (!state.nextPageToken) return;
+
+    els.btnSelectAll.disabled = true;
+    try {
+      let pages = 0;
+      while (state.nextPageToken && pages < CONFIG.SELECT_ALL_MAX_PAGES) {
+        setAlbumNotice(LOADING_REST + '（いま ' + state.albumImages.length + ' 枚）');
+        const before = state.albumImages.length;
+        await loadAlbum(false);
+        pick();
+        pages++;
+        /* 増えなかったら、これ以上たどっても同じです。通信に失敗しても
+           nextPageToken が残ることがあるので、ここで必ず止めます。 */
+        if (state.albumImages.length === before) break;
+      }
+      if (state.nextPageToken) {
+        toast('いったん ' + state.albumImages.length + ' 枚まで選びました。'
+          + '続きは「もっと見る」で読み込んでから、もう一度どうぞ。', null, 7000);
+      }
+    } finally {
+      /* 自分が出した「残りを読み込んでいます…」だけを消します。丸ごと消すと、
+         loadAlbum が出した「一部だけ表示しています」などの知らせまで
+         道連れになります。 */
+      if (els.albumNotice.textContent.indexOf(LOADING_REST) === 0) clearAlbumNotice();
+      els.btnSelectAll.disabled = false;
+    }
   }
 
   function toggleSelection(id, element) {
@@ -6277,12 +6334,7 @@
     'refresh-album': () => loadAlbum(true),
     'load-more': () => loadAlbum(false),
     'toggle-select-mode': toggleSelectMode,
-    'select-all': () => {
-      // 動画はまとめて保存できないので選択対象から外します
-      state.albumImages.forEach((img) => { if (!img.isVideo) state.selectedIds.add(img.id); });
-      syncSelectionUI();
-      updateDownloadBarUI();
-    },
+    'select-all': selectAllPhotos,
     'deselect-all': () => {
       state.selectedIds.clear();
       syncSelectionUI();
