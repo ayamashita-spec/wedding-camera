@@ -1857,15 +1857,10 @@
     /** Web Share でまとめて渡す上限。これを超えると OS 側で失敗しがちです */
     SHARE_MAX: 20,
 
-    JSZIP_URL: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+    /* ZIP はやめたので JSZip の設定も外しました。外部の CDN に依存するのは
+       ここだけだったため、いまはこのアプリが当日たよる先は
+       Google（写真の配信）と GAS（撮影と一覧）だけです。 */
 
-    /* 上の CDN の改ざん検知。cdnjs のページに出ている 3.10.1 の sha384 / sha512 を
-       そのまま貼ってください（例 'sha512-…'）。空なら検証しません。
-       値を間違えるとブラウザが読み込みを拒否し、ZIP 保存だけが壊れます。
-       必ず実機で「ZIP でまとめて保存」を 1 回通してから本番に入れてください。
-       なお jszip.min.js（約 100KB）をリポジトリに同梱して './vendor/jszip.min.js'
-       を指すようにすれば、SRI も CDN の到達性も気にしなくて済みます。 */
-    JSZIP_SRI: '',
     STORAGE_KEY_NAME: 'wedding_guest_name',
     STORAGE_KEY_IOS_HINT: 'wedding_ios_fs_hint',
     STORAGE_KEY_ROTATE_HINT: 'wedding_rotate_hint',
@@ -2855,13 +2850,13 @@
         return;
       }
 
-      const JSZipLib = await loadJsZip();
-      const zip = new JSZipLib();
-      files.forEach((file) => zip.file(file.name, file));
-      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
-      downloadBlob(blob, 'wedding_my_photos.zip');
-      toast(files.length + ' 件を ZIP で保存しました。', 'success', 7000);
+      /* 写真アプリへ渡せないときは 1 枚ずつ端末に落とします。
+         以前はここで ZIP にまとめていましたが、ZIP は端末で解凍しないと
+         写真として使えず、そのために外部のライブラリ（JSZip）を当日
+         借りてくる必要もありました。アルバムのまとめて保存と同じ
+         「1 枚ずつ」に揃えます。 */
       updateArchiveUI();
+      await pumpDownloads(files.map((f) => ({ name: f.name, blob: f })));
     } catch (error) {
       console.error('[archive:export]', error);
       toast('端末に保存できませんでした。', 'error');
@@ -3272,7 +3267,7 @@
         return;
       }
 
-      /* 動画を .jpg で渡すと、写真アプリが受け取りを拒否したり、ZIP から出しても
+      /* 動画を .jpg で渡すと、写真アプリが受け取りを拒否したり、端末に落ちても
          開けないファイルになります。ここはキューから動画を救い出す唯一の導線なので、
          exportArchive と同じく kind で名前と type を決めます。 */
       const files = items.map((item, index) => {
@@ -3292,14 +3287,11 @@
         return;
       }
 
-      // Web Share が使えない / 枚数が多い場合は ZIP に落とします
-      const JSZipLib = await loadJsZip();
-      const zip = new JSZipLib();
-      files.forEach((file) => zip.file(file.name, file));
-      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
-      downloadBlob(blob, 'wedding_unsent_photos.zip');
-      toast(files.length + ' 件を ZIP で保存しました。「ファイル」アプリをご確認ください。', 'success', 7000);
+      /* Web Share が使えない / 枚数が多いときは 1 枚ずつ端末に落とします。
+         ここはキューから写真と動画を救い出す唯一の導線なので、
+         解凍が要る ZIP ではなく、そのまま使える形で残します。 */
       button.textContent = '端末に保存する';
+      await pumpDownloads(files.map((f) => ({ name: f.name, blob: f })));
     } catch (error) {
       console.error('[savePendingLocal]', error);
       toast('端末に保存できませんでした。', 'error');
@@ -5652,10 +5644,11 @@
   /* ==========================================================================
    * 一括保存
    * ------------------------------------------------------------------------
-   * 旧版は 500ms 間隔で <a download> を連続クリックしていましたが、
-   * iOS Safari は 1 回の操作に対する複数ファイルの自動ダウンロードを
-   * ブロックするため、ゲストの多くが iPhone だと実質動きません。
-   * 「Web Share（写真アプリに直接）」「ZIP 1 ファイル」「Drive で開く」を用意します。
+   * 用意するのは「写真アプリに 1 枚ずつ（カメラロール）」「端末にダウンロード」
+   * 「Drive のフォルダを開く」の 3 つです。
+   *
+   * ZIP は外しました。1 つの塊で落ちるだけで、解凍しないと写真として使えず、
+   * そのために外部の CDN からライブラリを当日借りる必要もありました。
    * ======================================================================== */
   /**
    * 一括保存の対象。
@@ -5746,8 +5739,8 @@
   const closeDownloadSheet = () => closeOverlay(els.downloadSheet);
 
   /* シートを閉じたときの後始末。束を残したままにすると、次に開いたシートの
-     「タップして保存」が前回の続きを渡してしまいます。ZIP のボタンも
-     束の途中で隠しているので、必ず戻します。 */
+     「タップして保存」が前回の続きを渡してしまいます。「取得できなかったぶんを
+     やり直す」も前回のぶんが残るので、必ず戻します。 */
   function resetSaveSheetState() {
     state.preparedFiles = null;
     state.shareBatches = null;
@@ -6281,54 +6274,11 @@
     saveEachFile(missing);
   }
 
-  /**
-   * JSZip は使うときだけ読み込みます（会場の回線を無駄に使わないため）。
-   *
-   * 旧版は毎回 <script> を足しており、15 秒でタイムアウトしても外していなかった
-   * ため、タップのたびにタグが増えていました。読み込み中の Promise を使い回します。
-   *
-   * crossOrigin を付けるのは、Service Worker にキャッシュさせるためです。
-   * 属性が無いと no-cors 扱いで response.type が 'opaque' になり、sw.js の
-   * キャッシュ判定（response.ok）を通らないので、毎回ネットワークに出ます。
-   */
-  let jsZipPromise = null;
-
-  function loadJsZip() {
-    if (window.JSZip) return Promise.resolve(window.JSZip);
-    if (jsZipPromise) return jsZipPromise;
-
-    jsZipPromise = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      let timer = null;
-      const cleanup = () => {
-        clearTimeout(timer);
-        script.remove();
-      };
-
-      script.src = CONFIG.JSZIP_URL;
-      script.crossOrigin = 'anonymous';
-      if (CONFIG.JSZIP_SRI) script.integrity = CONFIG.JSZIP_SRI;
-      script.onload = () => {
-        cleanup();
-        // タグを外しても、実行済みのグローバルは残ります
-        window.JSZip ? resolve(window.JSZip) : reject(new Error('jszip_missing'));
-      };
-      script.onerror = () => { cleanup(); reject(new Error('jszip_load_failed')); };
-      timer = setTimeout(() => { cleanup(); reject(new Error('jszip_timeout')); }, 15000);
-
-      document.head.appendChild(script);
-    }).catch((error) => {
-      jsZipPromise = null; // 次のタップでやり直せるように
-      throw error;
-    });
-
-    return jsZipPromise;
-  }
-
-  /* アルバムの一括保存から ZIP は外しました。「ファイル」アプリに 1 つの塊で
-     落ちるだけで、ゲストが欲しい「写真アプリに JPG が 1 枚ずつ」になりません。
-     loadJsZip は残しています。表紙の「端末に保存する」と未送信分の書き出しで
-     まだ使っており、そちらは 1 つの塊で問題ない用途です。 */
+  /* ZIP はやめました。
+     解凍しないと写真として使えないうえ、外部の CDN から JSZip を当日
+     借りてくる必要がありました。会場でその CDN が届かなければ、
+     「撮ったぶんを端末に残す」が丸ごと失敗します。
+     いまはどの導線も pumpDownloads で 1 枚ずつ落とします。 */
 
   function saveViaDrive() {
     closeDownloadSheet();
