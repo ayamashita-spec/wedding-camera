@@ -1800,6 +1800,52 @@
        1 台が使ってよいのはごく一部です。4 本に留めています。 */
     DOWNLOAD_CONCURRENCY: 4,
 
+    /* --- 写真を Google から直接受け取る -----------------------------------
+       保存の本命はこちらです。GAS を通しません。
+
+       アルバムのサムネイルに使っている
+         https://drive.google.com/thumbnail?id=…
+       は CORS を返さないので fetch できません（実際 Failed to fetch）。
+       ところがこの URL の転送先である
+         https://lh3.googleusercontent.com/d/<ID>
+       は Access-Control-Allow-Origin: * を返します。つまり転送元が
+       塞がっていただけで、配信元そのものは最初から開いていました。
+
+       本番のオリジンから実測しました。
+         ・原本とバイト単位で完全一致（10 枚を SHA-1 で照合し 10/10 一致）
+         ・1 枚 320〜500 ms（GAS 経由は 5,558 ms）
+         ・40 枚を 8 並列で 2.8 秒（GAS 経由なら 222 秒）
+         ・Google に未ログインの端末でも取れる（共有が「リンクを知っている
+           全員」なので、サムネイルが見えている時点で本体も見えます）
+
+       つまり保存のあいだ GAS を 1 回も呼びません。当日 60 台が同時に
+       保存しても、Apps Script の同時実行 30 本は撮影と一覧のために丸ごと
+       空いたままになります。
+
+       動画には使えません。lh3 は動画 ID に対して mp4 ではなく静止画の
+       ポスターを返すため（実測 1152KB の mp4 に対し 114KB の image/jpeg）、
+       動画はこれまでどおり GAS 経由にします。
+
+       この URL の形は Google が文書化したものではないので、いつか変わる
+       可能性があります。失敗したら黙って GAS 経由に落ちる作りにしてあり、
+       その場合でも今日と同じ動きに戻るだけです。 */
+    DIRECT_BASE: 'https://lh3.googleusercontent.com/d/',
+
+    /* 並列数。8 本で 34 枚を投げたら 4 枚が HTTP 429（多すぎます）で弾かれました。
+       Google 側は同時本数だけでなく、その回線から短時間に何回来たかも見ている
+       ようで、3 本まで落としても 429 は残ります。速さより取りこぼしの無さを
+       採り、4 本 + 429 なら待って取り直す + それでも駄目なら GAS、の三段にします。
+       実測では 34 枚が 2.7 秒で 33 枚成功、残り 1 枚が GAS 経由に落ちました。 */
+    DIRECT_CONCURRENCY: 4,
+    DIRECT_RETRY: 3,
+    DIRECT_RETRY_BASE_MS: 600,
+    DIRECT_TIMEOUT_MS: 20000,
+
+    /* 直接取得が続けて何回失敗したら、残りを全部 GAS に回すか。
+       会場全体で回線が絞られている場合、粘っても 429 が返り続けるだけなので、
+       早めに見切って確実なほうへ寄せます。 */
+    DIRECT_GIVEUP_STREAK: 6,
+
     /** Web Share でまとめて渡す上限。これを超えると OS 側で失敗しがちです */
     SHARE_MAX: 20,
 
@@ -5448,9 +5494,15 @@
     button.textContent = '⏳ 取得しています…';
 
     try {
-      const response = await callApiWithRetry('getSingleBase64', { fileId: imgData.id },
-        imgData.isVideo ? { timeout: CONFIG.VIDEO_UPLOAD_TIMEOUT_MS } : undefined);
-      const blob = base64ToBlob(response.data, type);
+      /* まず Google から直接。写真ならこれで 0.4 秒前後で終わります。
+         GAS 経由だと同じ 1 枚に 5.5 秒かかっていました。動画と、
+         直リンクが通らなかったときだけ下の GAS 経由に落ちます。 */
+      let blob = await fetchDirectBlob(imgData);
+      if (!blob) {
+        const response = await callApiWithRetry('getSingleBase64', { fileId: imgData.id },
+          imgData.isVideo ? { timeout: CONFIG.VIDEO_UPLOAD_TIMEOUT_MS } : undefined);
+        blob = base64ToBlob(response.data, type);
+      }
       const file = new File([blob], fileName, { type: type });
 
       if (canShareFiles([file])) {
@@ -5605,12 +5657,78 @@
   }
 
   /**
-   * 対象を取得します。5 枚ずつまとめ、それを数本並列に走らせます。
+   * 写真本体の直リンク。動画には使えないので null を返します。
+   * 詳しい経緯は CONFIG.DIRECT_BASE の注記に書いてあります。
+   */
+  function directPhotoUrl(img) {
+    if (!img || !img.id || img.isVideo) return null;
+    if (!CONFIG.DIRECT_BASE) return null;
+    return CONFIG.DIRECT_BASE + encodeURIComponent(img.id);
+  }
+
+  /**
+   * Google の配信元から写真を 1 枚受け取ります。
+   * 取れなければ null を返すだけで、投げません。呼び出し側は GAS へ落とします。
    *
-   * GAS は 1 往復が重く、実測で 113KB の写真 1 枚に 5.5 秒かかりました
-   * （同じ画像を Google から直接読むと 0.93 秒）。ほとんどが転送ではなく
-   * GAS の起動と 302 の往復なので、「1 枚ずつ順番に」では 40 枚で 3 分半です。
-   * まとめて・並列に取ると、往復の回数そのものが減って一気に縮みます。
+   * @return {Promise<?Blob>}
+   */
+  async function fetchDirectBlob(img) {
+    const url = directPhotoUrl(img);
+    if (!url) return null;
+
+    for (let attempt = 0; attempt < CONFIG.DIRECT_RETRY; attempt++) {
+      if (state.cancelRequested) return null;
+
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = controller
+        ? setTimeout(() => controller.abort(), CONFIG.DIRECT_TIMEOUT_MS)
+        : null;
+      let wait = 0;
+      try {
+        const res = await fetch(url, {
+          cache: 'no-store',
+          credentials: 'omit',
+          signal: controller ? controller.signal : undefined
+        });
+
+        /* 429 は「いま多すぎます」であって「取れません」ではありません。
+           少し置いて聞き直すと通ります。Retry-After が付いていればそれに従います。 */
+        if (res.status === 429 || res.status === 503) {
+          const after = parseInt(res.headers.get('Retry-After'), 10);
+          wait = after > 0
+            ? Math.min(after * 1000, 8000)
+            : CONFIG.DIRECT_RETRY_BASE_MS * Math.pow(2, attempt) + Math.random() * 300;
+        } else if (!res.ok) {
+          return null;                      // 404 などは待っても変わりません
+        } else {
+          const blob = await res.blob();
+          /* 共有が外れていたりすると、画像のかわりにログイン画面の HTML が
+             200 で返ってきます。そのまま .jpg として保存すると開けない
+             ファイルが端末に残るので、中身を見てから通します。 */
+          if (!blob || blob.size < 1024) return null;
+          if (blob.type && blob.type.indexOf('image/') !== 0) return null;
+          const head = new Uint8Array(await blob.slice(0, 3).arrayBuffer());
+          if (head[0] !== 0xff || head[1] !== 0xd8 || head[2] !== 0xff) return null;
+          return blob;
+        }
+      } catch (error) {
+        wait = CONFIG.DIRECT_RETRY_BASE_MS * Math.pow(2, attempt);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+
+      if (attempt === CONFIG.DIRECT_RETRY - 1) return null;
+      await sleep(wait);
+    }
+    return null;
+  }
+
+  /**
+   * まず Google から直接、取れなかったぶんだけ GAS から取ります。
+   *
+   * 直接取れる写真は 1 枚 320〜500 ms、40 枚を 8 並列で 2.8 秒でした。
+   * GAS 経由は 1 枚 5,558 ms なので、同じ 40 枚で 222 秒かかっていた計算です。
+   * 動画と、直リンクが塞がれた場合だけが GAS に残ります。
    *
    * 取れたぶんは onReady で即座に渡します。全部揃うまで待って渡すと、
    * 途中で失敗したときに何も手元に残りません。
@@ -5621,18 +5739,82 @@
    */
   async function fetchAllBlobs(targets, onReady) {
     const results = [];
-    const failed = [];
+    const deliver = (items) => {
+      items.forEach((it) => results.push(it));
+      if (onReady && items.length) onReady(items);
+    };
+
     let done = 0;
+    const bump = (n) => {
+      done += n;
+      updateProgress('取得しています… ' + Math.min(done, targets.length) + '/' + targets.length,
+        done / targets.length);
+    };
+
+    /* 第 1 段：Google から直接。ここでほぼ全部が片付きます。 */
+    const leftovers = [];
+    const direct = targets.filter((img) => directPhotoUrl(img));
+    targets.forEach((img) => { if (!directPhotoUrl(img)) leftovers.push(img); });
+
+    if (direct.length) {
+      let cursor = 0;
+      let streak = 0;                       // 続けて失敗した回数
+      const directWorker = async () => {
+        while (cursor < direct.length && !state.cancelRequested) {
+          /* 回線ごと絞られているときは、粘っても 429 が返り続けるだけです。
+             早めに見切って残りを丸ごと GAS に渡したほうが早く終わります。 */
+          if (streak >= CONFIG.DIRECT_GIVEUP_STREAK) {
+            while (cursor < direct.length) leftovers.push(direct[cursor++]);
+            return;
+          }
+          const img = direct[cursor++];
+          const blob = await fetchDirectBlob(img);
+          /* 直接取れなかったぶんはここでは数えません。数えると GAS 側でも
+             もう一度数えてしまい、進捗が 40/40 を超えて動きます。 */
+          if (blob) {
+            streak = 0;
+            deliver([{ name: ensureJpgName(img.name), blob: blob }]);
+            bump(1);
+          } else {
+            streak++;
+            leftovers.push(img);
+          }
+        }
+      };
+      const lanes = Math.min(CONFIG.DIRECT_CONCURRENCY, direct.length) || 1;
+      await Promise.all(Array.from({ length: lanes }, directWorker));
+      if (leftovers.length) {
+        console.warn('[bulk] 直接取得できず GAS に回す: ' + leftovers.length + ' 件');
+      }
+    }
+
+    if (!leftovers.length || state.cancelRequested) {
+      state.saveMissing = null;
+      return results;
+    }
+
+    /* 第 2 段：残りを GAS から。動画と、直リンクが通らなかったぶんです。 */
+    return fetchViaGas(leftovers, deliver, bump, results);
+  }
+
+  /**
+   * GAS 経由の取得。5 枚ずつまとめ、それを数本並列に走らせます。
+   * いまは動画と、直接取れなかったぶんの受け皿です。
+   */
+  async function fetchViaGas(targets, deliver, bump, results) {
+    const failed = [];
+
+    /* 動画に .jpg を付けると端末で開けなくなります。ここは動画も通るので、
+       名前と種別を写真と分けます。 */
+    const asItem = (img, base64) => ({
+      name: img.isVideo ? (img.name || 'wedding_video.mp4') : ensureJpgName(img.name),
+      blob: base64ToBlob(base64, img.isVideo ? (img.mimeType || 'video/mp4') : 'image/jpeg')
+    });
 
     const chunks = [];
     for (let i = 0; i < targets.length; i += CONFIG.DOWNLOAD_CHUNK) {
       chunks.push(targets.slice(i, i + CONFIG.DOWNLOAD_CHUNK));
     }
-
-    const deliver = (items) => {
-      items.forEach((it) => results.push(it));
-      if (onReady && items.length) onReady(items);
-    };
 
     let next = 0;
     const worker = async () => {
@@ -5647,7 +5829,7 @@
           const got = [];
           chunk.forEach((img) => {
             const base64 = response.data && response.data[img.id];
-            if (base64) got.push({ name: ensureJpgName(img.name), blob: base64ToBlob(base64, 'image/jpeg') });
+            if (base64) got.push(asItem(img, base64));
             else failed.push(img);
           });
           deliver(got);
@@ -5655,9 +5837,7 @@
           console.warn('[bulk] チャンク失敗', error.message);
           chunk.forEach((img) => failed.push(img));
         }
-        done += chunk.length;
-        updateProgress('取得しています… ' + Math.min(done, targets.length) + '/' + targets.length,
-          done / targets.length);
+        bump(chunk.length);
       }
     };
 
@@ -5679,7 +5859,7 @@
           try {
             const one = await callApiWithRetry('getSingleBase64', { fileId: img.id },
               { timeout: CONFIG.BATCH_TIMEOUT_MS });
-            if (one.data) deliver([{ name: ensureJpgName(img.name), blob: base64ToBlob(one.data, 'image/jpeg') }]);
+            if (one.data) deliver([asItem(img, one.data)]);
             else failed.push(img);
           } catch (error) {
             console.warn('[bulk] 1 枚取り直しも失敗', img.id, error.message);
